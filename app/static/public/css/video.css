@@ -675,15 +675,25 @@ body {
   margin-bottom: 12px;
 }
 
-.slider-direction-mark {
-  margin-bottom: 6px;
-  font-size: 12px;
-  color: var(--accents-6);
-  line-height: 1.4;
+.timeline-delete-zone {
+  width: 100%;
+  appearance: none;
+  background: transparent;
+  --timeline-track-bg: linear-gradient(90deg, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.95) 100%);
 }
 
-#editTimeline {
-  width: 100%;
+.timeline-delete-zone::-webkit-slider-runnable-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--timeline-track-bg);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.timeline-delete-zone::-moz-range-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--timeline-track-bg);
+  border: 1px solid rgba(148, 163, 184, 0.35);
 }
 
 .edit-meta-grid {

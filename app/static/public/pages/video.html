@@ -154,8 +154,7 @@
                 <video id="editVideo" controls preload="metadata"></video>
               </div>
               <div class="edit-slider-wrap">
-                <div class="slider-direction-mark">从这里开始拼接，右侧将由新视频接续</div>
-                <input id="editTimeline" type="range" min="0" max="100000" step="1" value="0">
+                <input id="editTimeline" class="timeline-delete-zone" data-delete-side="right" type="range" min="0" max="100000" step="1" value="0">
                 <div class="progress-meta">
                   <span id="editTimeText">00:00.000</span>
                   <span id="editDurationText">总时长 -</span>
@@ -198,8 +197,7 @@
                       <video id="mergeVideoPreviewA" controls preload="metadata"></video>
                     </div>
                     <div class="edit-slider-wrap">
-                      <div class="slider-direction-mark">方向：保留左侧（起点 -> 当前帧）</div>
-                      <input id="mergeTimelineA" type="range" min="0" max="100000" step="1" value="0">
+                      <input id="mergeTimelineA" class="timeline-delete-zone" data-delete-side="right" type="range" min="0" max="100000" step="1" value="0">
                       <div class="progress-meta">
                         <span id="mergeTimeTextA">00:00.000</span>
                         <span id="mergeDurationA">总时长 -</span>
@@ -212,8 +210,7 @@
                       <video id="mergeVideoPreviewB" controls preload="metadata"></video>
                     </div>
                     <div class="edit-slider-wrap">
-                      <div class="slider-direction-mark">方向：保留右侧（当前帧 -> 结尾）</div>
-                      <input id="mergeTimelineB" type="range" min="0" max="100000" step="1" value="0">
+                      <input id="mergeTimelineB" class="timeline-delete-zone" data-delete-side="left" type="range" min="0" max="100000" step="1" value="0">
                       <div class="progress-meta">
                         <span id="mergeTimeTextB">00:00.000</span>
                         <span id="mergeDurationB">总时长 -</span>
@@ -321,7 +318,7 @@
   <script src="/static/common/js/pwa.js?v=0.1.1"></script>
   <script src="/static/vendor/ffmpeg/ffmpeg.js?v=0.1.0"></script>
   <script src="/static/vendor/ffmpeg/ffmpeg-util.js?v=0.1.0"></script>
-  <script src="/static/public/js/video.js?v=0.5.37"></script>
+  <script src="/static/public/js/video.js?v=0.5.38"></script>
 </body>
 
 </html>

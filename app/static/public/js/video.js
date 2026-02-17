@@ -194,6 +194,31 @@
     return Math.max(0, Math.min(safe, maxMs));
   }
 
+  function updateDeleteZoneTrack(inputEl) {
+    if (!inputEl) return;
+    const maxRaw = Number(inputEl.max || EDIT_TIMELINE_MAX);
+    const max = Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : EDIT_TIMELINE_MAX;
+    const valueRaw = Number(inputEl.value || 0);
+    const value = Math.max(0, Math.min(max, Number.isFinite(valueRaw) ? valueRaw : 0));
+    const pct = (value / max) * 100;
+    const side = String(inputEl.dataset.deleteSide || 'right');
+    const warnPattern = 'repeating-linear-gradient(135deg, rgba(148,163,184,0.38) 0 7px, rgba(100,116,139,0.58) 7px 14px)';
+    const keep = 'rgba(255,255,255,0.95)';
+    let bg = '';
+    if (side === 'left') {
+      bg = `linear-gradient(90deg, transparent 0%, transparent ${pct}%, ${keep} ${pct}%, ${keep} 100%), ${warnPattern}`;
+    } else {
+      bg = `linear-gradient(90deg, ${keep} 0%, ${keep} ${pct}%, transparent ${pct}%, transparent 100%), ${warnPattern}`;
+    }
+    inputEl.style.setProperty('--timeline-track-bg', bg);
+  }
+
+  function refreshAllDeleteZoneTracks() {
+    updateDeleteZoneTrack(editTimeline);
+    updateDeleteZoneTrack(mergeTimelineA);
+    updateDeleteZoneTrack(mergeTimelineB);
+  }
+
   function setSpliceButtonState(state) {
     if (!spliceBtn) return;
     const iconSplice = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H6a2 2 0 0 0-2 2v5"/><path d="M13 20h5a2 2 0 0 0 2-2v-5"/><path d="M20 6l-8 8"/><path d="M4 18l8-8"/></svg>';
@@ -1446,6 +1471,7 @@
     const current = Number(editVideo.currentTime || 0);
     const ratio = Math.max(0, Math.min(1, current / duration));
     editTimeline.value = String(Math.round(ratio * EDIT_TIMELINE_MAX));
+    updateDeleteZoneTrack(editTimeline);
     lockedTimestampMs = clampEditTimestampMs(Math.round(current * 1000));
     if (editTimeText) editTimeText.textContent = formatMs(lockedTimestampMs);
   }
@@ -2494,6 +2520,7 @@
       const ratio = Number(editTimeline.value || 0) / EDIT_TIMELINE_MAX;
       const nextTime = Math.max(0, Math.min(duration, duration * ratio));
       editVideo.currentTime = nextTime;
+      updateDeleteZoneTrack(editTimeline);
       lockedTimestampMs = clampEditTimestampMs(Math.round(nextTime * 1000));
       if (editTimeText) editTimeText.textContent = formatMs(lockedTimestampMs);
       lockFrameByCurrentTime();
@@ -2533,6 +2560,7 @@
       mergeCutMsA = 0;
       if (mergeTimeTextA) mergeTimeTextA.textContent = formatMs(0);
       if (mergeTimelineA) mergeTimelineA.value = '0';
+      updateDeleteZoneTrack(mergeTimelineA);
     });
   }
 
@@ -2545,6 +2573,7 @@
       mergeCutMsB = 0;
       if (mergeTimeTextB) mergeTimeTextB.textContent = formatMs(0);
       if (mergeTimelineB) mergeTimelineB.value = '0';
+      updateDeleteZoneTrack(mergeTimelineB);
     });
   }
 
@@ -2556,6 +2585,7 @@
       const ratio = Number(mergeTimelineA.value || 0) / EDIT_TIMELINE_MAX;
       const nextTime = Math.max(0, Math.min(duration, duration * ratio));
       mergeVideoPreviewA.currentTime = nextTime;
+      updateDeleteZoneTrack(mergeTimelineA);
       mergeCutMsA = Math.round(nextTime * 1000);
       if (mergeTimeTextA) mergeTimeTextA.textContent = formatMs(mergeCutMsA);
     });
@@ -2569,6 +2599,7 @@
       const ratio = Number(mergeTimelineB.value || 0) / EDIT_TIMELINE_MAX;
       const nextTime = Math.max(0, Math.min(duration, duration * ratio));
       mergeVideoPreviewB.currentTime = nextTime;
+      updateDeleteZoneTrack(mergeTimelineB);
       mergeCutMsB = Math.round(nextTime * 1000);
       if (mergeTimeTextB) mergeTimeTextB.textContent = formatMs(mergeCutMsB);
     });
@@ -2960,6 +2991,7 @@
   updateMergeLabels();
   updateHistoryCount();
   updateManualActionsVisibility();
+  refreshAllDeleteZoneTracks();
   setSpliceButtonState('idle');
   if (imageUrlInput && imageUrlInput.value.trim()) {
     const resolved = resolveReferenceByText(imageUrlInput.value.trim());
