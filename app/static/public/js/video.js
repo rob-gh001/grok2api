@@ -608,6 +608,14 @@
     throw lastErr || new Error('blob_url_candidates_failed');
   }
 
+  async function toOptionalBlobUrl(urls, mime, timeoutMs = 12000) {
+    try {
+      return await toBlobUrlFromCandidates(urls, mime, timeoutMs);
+    } catch (e) {
+      return '';
+    }
+  }
+
   async function ensureFfmpeg() {
     if (ffmpegLoaded && ffmpegInstance) return ffmpegInstance;
     if (ffmpegLoading) {
@@ -643,7 +651,7 @@
       // 统一转为同源 blob URL，避免跨域 Worker 限制，同时实现多源超时切换。
       const coreURL = await toBlobUrlFromCandidates(candidates.coreURL, 'text/javascript');
       const wasmURL = await toBlobUrlFromCandidates(candidates.wasmURL, 'application/wasm');
-      const workerURL = await toBlobUrlFromCandidates(candidates.workerURL, 'text/javascript');
+      const workerURL = await toOptionalBlobUrl(candidates.workerURL, 'text/javascript');
       if (typeof FFmpegCtor === 'function') {
         try {
           // 兼容 @ffmpeg/ffmpeg 0.12+ 的 class FFmpeg
@@ -653,11 +661,11 @@
           ffmpegInstance = FFmpegCtor({ log: false });
         }
         if (ffmpegInstance && typeof ffmpegInstance.load === 'function') {
-          await ffmpegInstance.load({
-            coreURL,
-            wasmURL,
-            workerURL,
-          });
+          const loadConfig = { coreURL, wasmURL };
+          if (workerURL) {
+            loadConfig.workerURL = workerURL;
+          }
+          await ffmpegInstance.load(loadConfig);
         }
       }
       if (!ffmpegInstance) {
