@@ -1066,32 +1066,54 @@ html[data-theme='dark'] .cache-video-item.is-active .cache-video-thumb-wrap {
   }
 
   .edit-preview-wrap {
-    height: min(52vh, 360px);
+    position: relative;
+    width: min(100%, 420px);
+    margin-left: auto;
+    margin-right: auto;
+    height: auto;
+    aspect-ratio: 9 / 16;
     max-height: min(52vh, 360px);
     display: flex;
     align-items: center;
     justify-content: center;
+    contain: layout paint style;
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
   }
 
   #editVideo {
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
     max-height: min(52vh, 360px);
+    object-fit: contain;
   }
 
   .manual-merge-col .edit-preview-wrap {
-    height: min(40vh, 280px);
+    position: relative;
+    width: min(100%, 420px);
+    margin-left: auto;
+    margin-right: auto;
+    height: auto;
+    aspect-ratio: 9 / 16;
     max-height: min(40vh, 280px);
     display: flex;
     align-items: center;
     justify-content: center;
+    contain: layout paint style;
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
   }
 
   #mergeVideoPreviewA,
   #mergeVideoPreviewB {
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
     max-height: min(40vh, 280px);
+    object-fit: contain;
   }
 
   .manual-merge-grid {

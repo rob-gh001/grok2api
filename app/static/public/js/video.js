@@ -128,6 +128,9 @@
     videoEl.setAttribute('playsinline', '');
     videoEl.setAttribute('webkit-playsinline', '');
     videoEl.setAttribute('x5-playsinline', 'true');
+    videoEl.style.objectFit = 'contain';
+    videoEl.style.maxWidth = '100%';
+    videoEl.style.maxHeight = '100%';
   }
 
   function shortHash(value) {
