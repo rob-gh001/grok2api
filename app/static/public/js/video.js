@@ -95,6 +95,7 @@
   let mergeCutMsA = 0;
   let mergeCutMsB = 0;
   let workVideoObjectUrl = '';
+  let editTimelineTaskLocked = false;
 
   function buildHistoryTitle(type, serial) {
     const n = Math.max(1, parseInt(String(serial || '1'), 10) || 1);
@@ -237,11 +238,26 @@
     spliceBtn.innerHTML = `${iconSplice}<span>拼接视频</span>`;
   }
 
+  function syncTimelineAvailability() {
+    const hasWorkspaceVideo = Boolean(String(selectedVideoUrl || '').trim());
+    if (editTimeline) {
+      editTimeline.disabled = editTimelineTaskLocked || !hasWorkspaceVideo;
+      editTimeline.classList.toggle('is-disabled', editTimeline.disabled);
+    }
+    if (mergeTimelineA) {
+      mergeTimelineA.disabled = !hasWorkspaceVideo;
+      mergeTimelineA.classList.toggle('is-disabled', mergeTimelineA.disabled);
+    }
+    const hasVideoB = Boolean(String(mergeTargetVideoUrl || '').trim());
+    if (mergeTimelineB) {
+      mergeTimelineB.disabled = !hasVideoB;
+      mergeTimelineB.classList.toggle('is-disabled', mergeTimelineB.disabled);
+    }
+  }
+
   function setEditTimelineLock(locked) {
-    if (!editTimeline) return;
-    editTimeline.disabled = Boolean(locked);
-    editTimeline.style.pointerEvents = locked ? 'none' : '';
-    editTimeline.style.opacity = locked ? '0.6' : '';
+    editTimelineTaskLocked = Boolean(locked);
+    syncTimelineAvailability();
   }
 
   function updateHistoryCount() {
@@ -274,6 +290,7 @@
     refreshVideoSelectionUi();
     updateMergeLabels();
     updateManualActionsVisibility();
+    syncTimelineAvailability();
   }
 
   function updateMergeLabels() {
@@ -1235,6 +1252,7 @@
     setEditMeta();
     updateMergeLabels();
     updateManualActionsVisibility();
+    syncTimelineAvailability();
     bindMergeVideoA(safeUrl);
   }
 
@@ -1251,6 +1269,7 @@
     mergeCutMsA = 0;
     if (mergeTimeTextA) mergeTimeTextA.textContent = formatMs(0);
     if (mergeTimelineA) mergeTimelineA.value = '0';
+    syncTimelineAvailability();
   }
 
   function bindMergeVideoB(url) {
@@ -1261,6 +1280,7 @@
     mergeCutMsB = 0;
     if (mergeTimeTextB) mergeTimeTextB.textContent = formatMs(0);
     if (mergeTimelineB) mergeTimelineB.value = '0';
+    syncTimelineAvailability();
   }
 
   function openEditPanel() {
@@ -2992,6 +3012,7 @@
   updateHistoryCount();
   updateManualActionsVisibility();
   refreshAllDeleteZoneTracks();
+  syncTimelineAvailability();
   setSpliceButtonState('idle');
   if (imageUrlInput && imageUrlInput.value.trim()) {
     const resolved = resolveReferenceByText(imageUrlInput.value.trim());

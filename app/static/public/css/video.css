@@ -696,6 +696,20 @@ body {
   border: 1px solid rgba(148, 163, 184, 0.35);
 }
 
+.timeline-delete-zone.is-disabled {
+  cursor: not-allowed;
+}
+
+.timeline-delete-zone.is-disabled::-webkit-slider-runnable-track {
+  background: linear-gradient(90deg, rgba(148, 163, 184, 0.28) 0%, rgba(148, 163, 184, 0.28) 100%);
+  border-color: rgba(148, 163, 184, 0.45);
+}
+
+.timeline-delete-zone.is-disabled::-moz-range-track {
+  background: linear-gradient(90deg, rgba(148, 163, 184, 0.28) 0%, rgba(148, 163, 184, 0.28) 100%);
+  border-color: rgba(148, 163, 184, 0.45);
+}
+
 .edit-meta-grid {
   margin-bottom: 12px;
 }
