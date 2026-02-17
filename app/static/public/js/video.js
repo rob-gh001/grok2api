@@ -86,6 +86,7 @@
   let ffmpegInstance = null;
   let ffmpegLoaded = false;
   let ffmpegLoading = false;
+  const ffmpegLogBuffer = [];
   const DEFAULT_REASONING_EFFORT = 'low';
   const EDIT_TIMELINE_MAX = 100000;
   const TAIL_FRAME_GUARD_MS = 80;
@@ -131,6 +132,48 @@
     if (editFrameIndex) editFrameIndex.textContent = lockedFrameIndex >= 0 ? String(lockedFrameIndex) : '-';
     if (editTimestampMs) editTimestampMs.textContent = String(Math.max(0, Math.round(lockedTimestampMs)));
     if (editFrameHash) editFrameHash.textContent = shortHash(lastFrameHash);
+  }
+
+  function pushFfmpegLog(line) {
+    const text = String(line || '').trim();
+    if (!text) return;
+    ffmpegLogBuffer.push(`[${new Date().toISOString()}] ${text}`);
+    if (ffmpegLogBuffer.length > 400) {
+      ffmpegLogBuffer.splice(0, ffmpegLogBuffer.length - 400);
+    }
+  }
+
+  function dumpFfmpegLogs(context, err, extra) {
+    const msg = String(err && err.message ? err.message : err);
+    console.groupCollapsed(`[ffmpeg-debug] ${context}: ${msg}`);
+    if (extra) {
+      console.log('extra:', extra);
+    }
+    const tail = ffmpegLogBuffer.slice(-120);
+    if (tail.length) {
+      console.log('recent logs:\n' + tail.join('\n'));
+    } else {
+      console.log('recent logs: <empty>');
+    }
+    console.groupEnd();
+  }
+
+  function attachFfmpegLogger(ff) {
+    if (!ff || ff.__debugLoggerAttached) return;
+    if (typeof ff.on === 'function') {
+      try {
+        ff.on('log', (event) => {
+          const type = event && event.type ? String(event.type) : 'log';
+          const message = event && event.message ? String(event.message) : '';
+          const line = `[${type}] ${message}`;
+          pushFfmpegLog(line);
+          console.debug('[ffmpeg]', line);
+        });
+        ff.__debugLoggerAttached = true;
+      } catch (e) {
+        // ignore
+      }
+    }
   }
 
   function getSafeEditMaxTimestampMs() {
@@ -828,6 +871,7 @@
       if (!ffmpegInstance) {
         throw new Error('ffmpeg_instance_init_failed');
       }
+      attachFfmpegLogger(ffmpegInstance);
       ffmpegLoaded = true;
       return ffmpegInstance;
     } finally {
@@ -932,13 +976,18 @@
   }
 
   async function ffmpegExec(ff, args) {
-    if (typeof ff.exec === 'function') {
-      return await ff.exec(args);
+    try {
+      if (typeof ff.exec === 'function') {
+        return await ff.exec(args);
+      }
+      if (typeof ff.run === 'function') {
+        return await ff.run(...args);
+      }
+      throw new Error('ffmpeg_exec_unsupported');
+    } catch (e) {
+      dumpFfmpegLogs('ffmpegExec_failed', e, { args });
+      throw e;
     }
-    if (typeof ff.run === 'function') {
-      return await ff.run(...args);
-    }
-    throw new Error('ffmpeg_exec_unsupported');
   }
 
   function buildSseUrl(taskId, rawPublicKey) {
@@ -2803,6 +2852,8 @@
     .forEach((el) => {
       el.addEventListener('change', updateMeta);
     });
+
+  window.__VIDEO_FFMPEG_LOGS__ = () => ffmpegLogBuffer.slice();
 
   updateMeta();
   updateMergeLabels();
