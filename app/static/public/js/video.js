@@ -90,20 +90,12 @@
   let mergeCutMsA = 0;
   let mergeCutMsB = 0;
 
-  function compactTitleToken(value) {
-    const raw = String(value || '').trim();
-    const cleaned = raw.replace(/[^a-zA-Z0-9]/g, '');
-    if (cleaned) return cleaned.slice(0, 8);
-    const ts = String(Date.now());
-    return ts.slice(Math.max(0, ts.length - 8));
-  }
-
-  function buildHistoryTitle(type, value) {
-    const token = compactTitleToken(value);
+  function buildHistoryTitle(type, serial) {
+    const n = Math.max(1, parseInt(String(serial || '1'), 10) || 1);
     if (type === 'splice') {
-      return `拼接视频第${token}轮`;
+      return `拼接视频${n}`;
     }
-    return `生成视频${token}`;
+    return `生成视频${n}`;
   }
   let cacheModalPickMode = 'edit';
   let cacheModalAnchorEl = null;
@@ -1008,7 +1000,11 @@
     if (!container) return;
     const body = container.querySelector('.video-item-body');
     if (!body) return;
+    const actions = body.querySelector('.video-item-actions-overlay');
     body.innerHTML = html;
+    if (actions) {
+      body.appendChild(actions);
+    }
     const videoEl = body.querySelector('video');
     let videoUrl = '';
     if (videoEl) {
@@ -1030,7 +1026,11 @@
     const safeUrl = url || '';
     const body = container.querySelector('.video-item-body');
     if (!body) return;
+    const actions = body.querySelector('.video-item-actions-overlay');
     body.innerHTML = `\n      <video controls preload="metadata">\n        <source src="${safeUrl}" type="video/mp4">\n      </video>\n    `;
+    if (actions) {
+      body.appendChild(actions);
+    }
     updateItemLinks(container, safeUrl);
   }
 
@@ -1424,7 +1424,7 @@
     previewCount = 0;
     for (const taskId of taskIds) {
       const previewItem = initPreviewSlot();
-      setPreviewTitle(previewItem, buildHistoryTitle('generated', taskId));
+      setPreviewTitle(previewItem, buildHistoryTitle('generated', previewItem && previewItem.dataset ? previewItem.dataset.index : previewCount));
       taskStates.set(taskId, {
         taskId,
         source: null,
@@ -1855,7 +1855,7 @@
       if (item) {
         selectedVideoItemId = String(item.dataset.index || '');
         item.dataset.url = mergedUrl;
-        setPreviewTitle(item, buildHistoryTitle('splice', `manual-${Date.now()}`));
+        setPreviewTitle(item, buildHistoryTitle('splice', item.dataset.index || previewCount));
         renderVideoFromUrl({ previewItem: item }, mergedUrl);
         refreshVideoSelectionUi();
       }
@@ -1921,7 +1921,7 @@
         selectedVideoItemId = String(item.dataset.index || '');
         item.dataset.url = mergedUrl;
         item.dataset.round = String(nextRound);
-        setPreviewTitle(item, buildHistoryTitle('splice', taskId || String(nextRound)));
+        setPreviewTitle(item, buildHistoryTitle('splice', item.dataset.index || previewCount));
         const state = { previewItem: item };
         renderVideoFromUrl(state, mergedUrl);
         refreshVideoSelectionUi();
