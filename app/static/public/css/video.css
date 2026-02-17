@@ -679,21 +679,59 @@ body {
   width: 100%;
   appearance: none;
   background: transparent;
-  --timeline-track-bg: linear-gradient(90deg, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.95) 100%);
+  --cut-pct: 0%;
+  --keep-bg: rgba(255, 255, 255, 0.95);
+  --warn-bg: repeating-linear-gradient(135deg, rgba(148, 163, 184, 0.65) 0 6px, rgba(100, 116, 139, 0.9) 6px 12px);
 }
 
 .timeline-delete-zone::-webkit-slider-runnable-track {
   height: 8px;
   border-radius: 999px;
-  background: var(--timeline-track-bg);
+  background: var(--warn-bg);
   border: 1px solid rgba(148, 163, 184, 0.35);
 }
 
 .timeline-delete-zone::-moz-range-track {
   height: 8px;
   border-radius: 999px;
-  background: var(--timeline-track-bg);
+  background: var(--warn-bg);
   border: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.timeline-delete-zone[data-delete-side="right"]::-webkit-slider-runnable-track {
+  background: linear-gradient(90deg, var(--keep-bg) 0%, var(--keep-bg) var(--cut-pct), transparent var(--cut-pct), transparent 100%), var(--warn-bg);
+}
+
+.timeline-delete-zone[data-delete-side="right"]::-moz-range-track {
+  background: linear-gradient(90deg, var(--keep-bg) 0%, var(--keep-bg) var(--cut-pct), transparent var(--cut-pct), transparent 100%), var(--warn-bg);
+}
+
+.timeline-delete-zone[data-delete-side="left"]::-webkit-slider-runnable-track {
+  background: linear-gradient(90deg, transparent 0%, transparent var(--cut-pct), var(--keep-bg) var(--cut-pct), var(--keep-bg) 100%), var(--warn-bg);
+}
+
+.timeline-delete-zone[data-delete-side="left"]::-moz-range-track {
+  background: linear-gradient(90deg, transparent 0%, transparent var(--cut-pct), var(--keep-bg) var(--cut-pct), var(--keep-bg) 100%), var(--warn-bg);
+}
+
+.timeline-delete-zone::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  background: #111827;
+  margin-top: -5px;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.25);
+}
+
+.timeline-delete-zone::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  background: #111827;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.25);
 }
 
 .timeline-delete-zone.is-disabled {
@@ -708,6 +746,12 @@ body {
 .timeline-delete-zone.is-disabled::-moz-range-track {
   background: linear-gradient(90deg, rgba(148, 163, 184, 0.28) 0%, rgba(148, 163, 184, 0.28) 100%);
   border-color: rgba(148, 163, 184, 0.45);
+}
+
+.timeline-delete-zone.is-disabled::-webkit-slider-thumb,
+.timeline-delete-zone.is-disabled::-moz-range-thumb {
+  background: #64748b;
+  border-color: #cbd5e1;
 }
 
 .edit-meta-grid {

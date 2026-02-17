@@ -202,16 +202,7 @@
     const valueRaw = Number(inputEl.value || 0);
     const value = Math.max(0, Math.min(max, Number.isFinite(valueRaw) ? valueRaw : 0));
     const pct = (value / max) * 100;
-    const side = String(inputEl.dataset.deleteSide || 'right');
-    const warnPattern = 'repeating-linear-gradient(135deg, rgba(148,163,184,0.38) 0 7px, rgba(100,116,139,0.58) 7px 14px)';
-    const keep = 'rgba(255,255,255,0.95)';
-    let bg = '';
-    if (side === 'left') {
-      bg = `linear-gradient(90deg, transparent 0%, transparent ${pct}%, ${keep} ${pct}%, ${keep} 100%), ${warnPattern}`;
-    } else {
-      bg = `linear-gradient(90deg, ${keep} 0%, ${keep} ${pct}%, transparent ${pct}%, transparent 100%), ${warnPattern}`;
-    }
-    inputEl.style.setProperty('--timeline-track-bg', bg);
+    inputEl.style.setProperty('--cut-pct', `${pct}%`);
   }
 
   function refreshAllDeleteZoneTracks() {
