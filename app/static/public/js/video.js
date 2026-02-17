@@ -638,20 +638,12 @@
       const candidates = {
         coreURL: [
           '/static/vendor/ffmpeg/ffmpeg-core.js',
-          'https://registry.npmmirror.com/@ffmpeg/core/0.12.6/files/dist/umd/ffmpeg-core.js',
-          'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
-          'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
         ],
         wasmURL: [
           '/static/vendor/ffmpeg/ffmpeg-core.wasm',
-          'https://registry.npmmirror.com/@ffmpeg/core/0.12.6/files/dist/umd/ffmpeg-core.wasm',
-          'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm',
-          'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm',
         ],
         workerURL: [
           '/static/vendor/ffmpeg/ffmpeg-core.worker.js',
-          'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.worker.js',
-          'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.worker.js',
         ],
       };
       // 统一转为同源 blob URL，避免跨域 Worker 限制，同时实现多源超时切换。
