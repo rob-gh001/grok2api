@@ -477,6 +477,7 @@
     const item = document.createElement('div');
     item.className = 'video-item';
     item.dataset.index = String(previewCount);
+    item.dataset.completed = '0';
     item.classList.add('is-pending');
 
     const header = document.createElement('div');
@@ -548,6 +549,7 @@
     const link = item.querySelector('.video-item-link');
     const safeUrl = url || '';
     item.dataset.url = safeUrl;
+    item.dataset.completed = safeUrl ? '1' : '0';
     if (link) {
       link.textContent = '';
       link.classList.remove('has-url');
@@ -1732,8 +1734,8 @@
     if (run.placeholders) {
       run.placeholders.forEach((item) => {
         if (!item) return;
-        const url = String(item.dataset.url || '').trim();
-        if (!url) {
+        const completed = String(item.dataset.completed || '0') === '1';
+        if (!completed) {
           removePreviewItem(item);
         }
       });
@@ -2078,6 +2080,7 @@
                 if (item) {
                   selectedVideoItemId = String(item.dataset.index || '');
                   item.dataset.url = mergedUrl;
+                  item.dataset.completed = '1';
                   item.dataset.round = String(nextRound);
                   setPreviewTitle(item, buildHistoryTitle('splice', item.dataset.index || previewCount));
                   const state = { previewItem: item };
@@ -2088,7 +2091,10 @@
                 successCount += 1;
               } catch (singleErr) {
                 if (item) {
-                  removePreviewItem(item);
+                  const completed = String(item.dataset.completed || '0') === '1';
+                  if (!completed) {
+                    removePreviewItem(item);
+                  }
                 }
                 if (String(singleErr && singleErr.message || '') === 'edit_cancelled') {
                   return;
