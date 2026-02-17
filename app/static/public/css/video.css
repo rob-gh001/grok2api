@@ -1020,6 +1020,10 @@ html[data-theme='dark'] .cache-video-item.is-active .cache-video-thumb-wrap {
     gap: 8px;
   }
 
+  .edit-meta-grid {
+    grid-template-columns: 1fr !important;
+  }
+
   .meta-item {
     padding: 8px 10px;
     gap: 8px;
