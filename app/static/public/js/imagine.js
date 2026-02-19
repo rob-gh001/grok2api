@@ -191,8 +191,8 @@
       setLightboxKeyboardShift(0);
       return;
     }
-    const overlap = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-    const shift = overlap > 0 ? Math.min(280, overlap + 12) : 0;
+    const overlap = Math.max(0, lightbox.clientHeight - vv.height - vv.offsetTop);
+    const shift = overlap > 0 ? Math.min(340, overlap + 12) : 0;
     setLightboxKeyboardShift(shift);
   }
 
