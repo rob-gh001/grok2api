@@ -392,7 +392,7 @@ async def public_imagine_ws(websocket: WebSocket):
                     token=token,
                     model_info=model_info,
                     prompt=prompt,
-                    n=6,
+                    n=4,
                     response_format="b64_json",
                     size="1024x1024",
                     aspect_ratio=aspect_ratio,

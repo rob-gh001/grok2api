@@ -5,8 +5,9 @@
 import aiofiles.os
 from urllib.parse import unquote
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse, StreamingResponse
+import httpx
 
 from app.core.logger import logger
 from app.core.storage import DATA_DIR
@@ -82,3 +83,45 @@ async def get_video(filename: str):
 
     logger.warning(f"Video not found: {filename}")
     raise HTTPException(status_code=404, detail="Video not found")
+
+
+@router.get("/proxy")
+async def proxy_file(url: str, request: Request):
+    """
+    代理文件，伪造 User-Agent 和 Referer 绕过防盗链
+    """
+    if not url:
+        raise HTTPException(status_code=400, detail="URL is required")
+
+    async with httpx.AsyncClient() as client:
+        try:
+            referer = request.headers.get("referer") or str(request.base_url)
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": referer,
+            }
+
+            req = client.build_request("GET", url, headers=headers)
+            r = await client.send(req, stream=True)
+            r.raise_for_status()
+
+            response_headers = {
+                key: value
+                for key, value in r.headers.items()
+                if key.lower() not in ["content-length", "transfer-encoding", "connection", "content-encoding"]
+            }
+
+            return StreamingResponse(
+                r.aiter_bytes(),
+                headers=response_headers,
+                status_code=r.status_code,
+                media_type=r.headers.get("content-type"),
+            )
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Proxy request failed for url {url} with status {e.response.status_code}: {e}")
+            raise HTTPException(status_code=e.response.status_code, detail=f"Failed to fetch URL: Server returned status {e.response.status_code}")
+        except Exception as e:
+            logger.error(f"Proxy request failed for url {url}: {e}")
+            raise HTTPException(status_code=500, detail=f"An error occurred while fetching the URL: {e}")

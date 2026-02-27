@@ -31,7 +31,7 @@
       <div class="page-head">
         <div>
           <h2 class="text-2xl font-semibold tracking-tight">NSFW 工作台</h2>
-          <p class="text-[var(--accents-4)] mt-1 text-sm">先生成 6 张候选图，再选中 1 张按 parentPostId 并行生成视频。</p>
+          <p class="text-[var(--accents-4)] mt-1 text-sm">先生成 4 张候选图，再选中 1 张按 parentPostId 并行生成视频。</p>
         </div>
         <div class="status-stack">
           <div id="imageStatusText" class="status-chip">候选图：未开始</div>
@@ -53,6 +53,10 @@
               <label class="field-label" for="videoPromptInput">视频提示词（可选）</label>
               <textarea id="videoPromptInput" class="geist-input form-textarea" placeholder="留空会按 spicy 模式处理；填写会走 custom 模式"></textarea>
             </div>
+            <div class="field field-wide">
+              <label class="field-label" for="parentPostIdInput">parentPostId (可选)</label>
+              <input id="parentPostIdInput" class="geist-input" placeholder="填写后可使用全局 postId 生成视频">
+            </div>
             <div class="field">
               <label class="field-label" for="ratioSelect">画面比例</label>
               <select id="ratioSelect" class="geist-input">
@@ -67,9 +71,9 @@
               <label class="field-label" for="videoParallelSelect">并行视频数</label>
               <select id="videoParallelSelect" class="geist-input">
                 <option value="1">1</option>
-                <option value="2">2</option>
+                <option value="2" selected>2</option>
                 <option value="3">3</option>
-                <option value="4" selected>4</option>
+                <option value="4">4</option>
               </select>
             </div>
             <div class="field">
@@ -99,8 +103,12 @@
 
         <div class="panel">
           <div class="panel-title">操作</div>
+          <div id="previewShell" class="preview-shell">
+            <img id="currentImage" class="current-image hidden" alt="current-image">
+            <div id="previewEmpty" class="preview-empty">请先选择候选图</div>
+          </div>
           <div class="action-grid">
-            <button id="generateBatchBtn" class="geist-button text-xs px-3">生成 6 张</button>
+            <button id="generateBatchBtn" class="geist-button text-xs px-3">生成 4 张</button>
             <button id="stopBatchBtn" class="geist-button-outline text-xs px-3">停止候选</button>
             <button id="nextBatchBtn" class="geist-button-outline text-xs px-3">再来一批</button>
             <button id="clearImagesBtn" class="geist-button-outline text-xs px-3">清空图片</button>
@@ -117,7 +125,7 @@
           <div class="panel-title">候选图瀑布流</div>
           <div id="imageCount" class="head-meta">0 张</div>
         </div>
-        <div id="candidateEmpty" class="empty-state">点击“生成 6 张”开始</div>
+        <div id="candidateEmpty" class="empty-state">点击“生成 4 张”开始</div>
         <div id="candidateWaterfall" class="candidate-waterfall"></div>
       </div>
 
@@ -135,7 +143,7 @@
   <div class="mobile-fab" data-mobile-fab>
     <div class="mobile-fab-panel">
       <div class="mobile-fab-actions">
-        <button class="geist-button" data-proxy-click="#generateBatchBtn" type="button">生成6张</button>
+        <button class="geist-button" data-proxy-click="#generateBatchBtn" type="button">生成4张</button>
         <button class="geist-button-outline" data-proxy-click="#stopBatchBtn" type="button">停候选</button>
         <button class="geist-button-outline" data-proxy-click="#nextBatchBtn" type="button">再来一批</button>
         <button class="geist-button-outline" data-proxy-click="#clearImagesBtn" type="button">清图片</button>
@@ -203,7 +211,7 @@
   <script src="/static/common/js/toast.js"></script>
   <script src="/static/common/js/prompt-enhancer.js?v=0.1.15"></script>
   <script src="/static/common/js/pwa.js?v=0.1.1"></script>
-  <script src="/static/public/js/nsfw.js?v=0.3.5"></script>
+  <script src="/static/public/js/nsfw.js?v=0.3.6"></script>
 </body>
 
 </html>

@@ -1,6 +1,7 @@
-﻿(() => {
+(() => {
   const imagePromptInput = document.getElementById('imagePromptInput');
   const videoPromptInput = document.getElementById('videoPromptInput');
+  const parentPostIdInput = document.getElementById('parentPostIdInput');
   const ratioSelect = document.getElementById('ratioSelect');
   const videoParallelSelect = document.getElementById('videoParallelSelect');
   const resolutionSelect = document.getElementById('resolutionSelect');
@@ -41,6 +42,9 @@
   const lightboxHistoryEmpty = document.getElementById('lightboxHistoryEmpty');
   const lightboxHistoryList = document.getElementById('lightboxHistoryList');
 
+  const currentImage = document.getElementById('currentImage');
+  const previewEmpty = document.getElementById('previewEmpty');
+
   const state = {
     candidates: [],
     selectedCandidateId: '',
@@ -73,6 +77,99 @@
     if (typeof showToast === 'function') {
       showToast(message, type);
     }
+  }
+
+  function setPreview(url) {
+    if (!currentImage || !previewEmpty) return;
+    const displayUrl = toDataUrl(url);
+    if (!displayUrl) {
+        currentImage.src = '';
+        currentImage.classList.add('hidden');
+        if (previewEmpty) {
+            previewEmpty.classList.remove('hidden');
+            previewEmpty.textContent = '输入ID后点击“显示图片”';
+        }
+        return;
+    }
+    currentImage.src = displayUrl;
+    currentImage.classList.remove('hidden');
+    if (previewEmpty) previewEmpty.classList.add('hidden');
+  }
+
+  function pickPreviewUrl(hit, parentPostId) {
+    const candidates = [
+        hit && hit.imageUrl,
+        hit && hit.image_url,
+        hit && hit.url,
+        hit && hit.sourceImageUrl,
+        hit && hit.source_image_url,
+    ];
+    for (const candidate of candidates) {
+        const raw = String(candidate || '').trim();
+        if (raw) return raw;
+    }
+    const source = pickSourceImageUrl([], parentPostId);
+    return source || (parentPostId ? buildImaginePublicUrl(parentPostId) : '');
+  }
+
+  function resolveParentMemoryByText(text) {
+    const input = String(text || '').trim();
+    if (!input) return null;
+    const api = getParentMemoryApi();
+    if (api && typeof api.resolveByText === 'function') {
+        try {
+            const hit = api.resolveByText(input);
+            if (hit && hit.parentPostId) {
+                const parentPostId = String(hit.parentPostId || '').trim();
+                return {
+                    ...hit,
+                    parentPostId,
+                };
+            }
+            return hit;
+        } catch (e) {
+            // ignore
+        }
+    }
+    const parentPostId = extractParentPostIdFromText(input);
+    if (!parentPostId) return null;
+    return {
+        parentPostId,
+        sourceImageUrl: buildImaginePublicUrl(parentPostId),
+        imageUrl: buildImaginePublicUrl(parentPostId),
+        origin: 'fallback',
+    };
+  }
+
+  function applyParentPostFromText(text, options = {}) {
+    const silent = Boolean(options.silent);
+    const hit = resolveParentMemoryByText(text);
+
+    if (!hit || !hit.parentPostId) {
+        if (!silent) {
+            toast('未识别到有效 parentPostId', 'warning');
+        }
+        return false;
+    }
+
+    const parentPostId = String(hit.parentPostId || '').trim();
+    const previewUrl = pickPreviewUrl(hit, parentPostId);
+
+    setPreview(previewUrl);
+
+    if (parentPostIdInput) {
+        parentPostIdInput.value = parentPostId;
+    }
+    if (state.selectedCandidateId) {
+        selectCandidate('');
+    } else {
+        updateSelectedMeta();
+    }
+
+    if (!silent) {
+        toast('已载入 parentPostId，可直接生成视频', 'success');
+    }
+    return true;
   }
 
   function setLightboxKeyboardShift(px) {
@@ -163,9 +260,23 @@
 
   function updateVideoButtons() {
     const hasSelected = Boolean(getSelectedCandidate());
+    const hasParentId = Boolean(parentPostIdInput && parentPostIdInput.value.trim());
     const running = state.videoRunning;
-    setToggleButtonState(startVideoBtn, running, '中止');
-    if (startVideoBtn) startVideoBtn.disabled = running ? false : !hasSelected;
+
+    if (startVideoBtn) {
+        startVideoBtn.dataset.running = running ? '1' : '0';
+        if (running) {
+            startVideoBtn.textContent = '中止';
+            startVideoBtn.disabled = false;
+        } else {
+            if (hasParentId) {
+                startVideoBtn.textContent = '使用ID生视频';
+            } else {
+                startVideoBtn.textContent = '选中图生视频';
+            }
+            startVideoBtn.disabled = !hasSelected && !hasParentId;
+        }
+    }
     if (stopVideoBtn) stopVideoBtn.disabled = !state.videoRunning;
   }
 
@@ -717,14 +828,22 @@
 
   function updateSelectedMeta() {
     const selected = getSelectedCandidate();
-    if (!selected) {
-      if (selectedMeta) selectedMeta.textContent = '未选择候选图';
-      updateVideoButtons();
-      return;
-    }
-    const prompt = (selected.prompt || '').slice(0, 34) || '-';
-    if (selectedMeta) {
-      selectedMeta.textContent = `已选中 #${selected.index} | parentPostId=${shortId(selected.parentPostId)} | ${prompt}`;
+    if (selected) {
+      const prompt = (selected.prompt || '').slice(0, 34) || '-';
+      if (selectedMeta) {
+        selectedMeta.textContent = `已选中 #${selected.index} | parentPostId=${shortId(selected.parentPostId)} | ${prompt}`;
+      }
+    } else {
+      const parentIdFromInput = parentPostIdInput ? extractParentPostIdFromText(parentPostIdInput.value) : '';
+      if (parentIdFromInput) {
+        if (selectedMeta) {
+          selectedMeta.textContent = `使用全局 parentPostId=${shortId(parentIdFromInput)}`;
+        }
+      } else {
+        if (selectedMeta) {
+          selectedMeta.textContent = '未选择候选图';
+        }
+      }
     }
     updateVideoButtons();
   }
@@ -935,11 +1054,20 @@
 
   function selectCandidate(id) {
     state.selectedCandidateId = id || '';
+    if (id && parentPostIdInput) {
+        parentPostIdInput.value = '';
+    }
     const cards = candidateWaterfall ? candidateWaterfall.querySelectorAll('.candidate-card') : [];
     cards.forEach((card) => {
       if (!(card instanceof HTMLElement)) return;
       card.classList.toggle('selected', card.dataset.id === state.selectedCandidateId);
     });
+    const selected = getSelectedCandidate();
+    if (selected) {
+        setPreview(selected.imageUrl);
+    } else if (!parentPostIdInput.value.trim()) {
+        setPreview('');
+    }
     updateSelectedMeta();
   }
 
@@ -1127,7 +1255,7 @@
     const ratio = ratioSelect ? ratioSelect.value : '16:9';
     const nsfwEnabled = nsfwSelect ? nsfwSelect.value === 'true' : true;
     const startCount = state.candidates.length;
-    state.imageTargetTotal = startCount + 6;
+    state.imageTargetTotal = startCount + 4;
 
     let data = null;
     try {
@@ -1203,6 +1331,7 @@
     closeLightboxView();
     renderCandidates();
     setChip(imageStatusText, '候选图：已清空', '');
+    setPreview('');
   }
 
   async function createVideoTask(authHeader, payload) {
@@ -1472,15 +1601,14 @@
   }
 
   async function startVideos() {
+    const parentPostIdFromInput = extractParentPostIdFromText(parentPostIdInput.value);
     const selected = getSelectedCandidate();
-    if (!selected) {
-      toast('请先选中一张候选图', 'error');
+
+    if (!parentPostIdFromInput && !selected) {
+      toast('请先选中一张候选图或填写 parentPostId', 'error');
       return;
     }
-    if (!selected.parentPostId) {
-      toast('该候选图缺少 parentPostId，无法走 NSFW 全流程', 'error');
-      return;
-    }
+
     if (state.videoRunning) {
       toast('视频任务正在运行中', 'warning');
       return;
@@ -1504,17 +1632,32 @@
     const prompt = genericPrompt ? '' : promptRaw;
     const preset = genericPrompt ? 'spicy' : 'custom';
 
+    let videoParentPostId;
+    let videoSourceImageUrl;
+
+    if (parentPostIdFromInput) {
+      videoParentPostId = parentPostIdFromInput;
+      videoSourceImageUrl = pickSourceImageUrl([], videoParentPostId);
+    } else {
+      if (!selected.parentPostId) {
+        toast('该候选图缺少 parentPostId，无法走 NSFW 全流程', 'error');
+        return;
+      }
+      videoParentPostId = selected.parentPostId;
+      videoSourceImageUrl = pickSourceImageUrl(
+        [selected.sourceImageUrl, selected.imageUrl],
+        selected.parentPostId
+      );
+    }
+
     const payload = {
       prompt,
       aspect_ratio: ratioSelect ? ratioSelect.value : '16:9',
       video_length: parseInt(videoLengthSelect?.value || '6', 10),
       resolution_name: resolutionSelect ? resolutionSelect.value : '480p',
       preset,
-      parent_post_id: selected.parentPostId,
-      source_image_url: pickSourceImageUrl(
-        [selected.sourceImageUrl, selected.imageUrl],
-        selected.parentPostId
-      ),
+      parent_post_id: videoParentPostId,
+      source_image_url: videoSourceImageUrl,
     };
 
     const taskIds = [];
@@ -1773,6 +1916,33 @@
       }
     });
   }
+
+  if (parentPostIdInput) {
+      parentPostIdInput.addEventListener('input', () => {
+          if (parentPostIdInput.value.trim() && state.selectedCandidateId) {
+              selectCandidate('');
+          } else {
+              updateSelectedMeta();
+          }
+          applyParentPostFromText(parentPostIdInput.value, { silent: true });
+      });
+
+      parentPostIdInput.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter') {
+              event.preventDefault();
+              applyParentPostFromText(parentPostIdInput.value);
+          }
+      });
+
+      parentPostIdInput.addEventListener('paste', (event) => {
+          const text = String(event.clipboardData ? event.clipboardData.getData('text') || '' : '').trim();
+          if (!text) return;
+          event.preventDefault();
+          parentPostIdInput.value = text;
+          applyParentPostFromText(text, { silent: true });
+      });
+  }
+
 
   document.addEventListener('keydown', (e) => {
     if (!lightbox || !lightbox.classList.contains('active')) return;
