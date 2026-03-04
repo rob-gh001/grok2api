@@ -17,6 +17,7 @@ from app.services.grok.services.model import ModelService
 from app.services.token import get_token_manager
 from app.core.exceptions import ValidationException, AppException, ErrorType
 from app.core.config import get_config
+from app.core.logger import logger
 
 
 router = APIRouter(tags=["Images"])
@@ -36,6 +37,27 @@ SIZE_TO_ASPECT = {
     "1024x1792": "2:3",
     "1024x1024": "1:1",
 }
+
+
+def _tool_error_response(exc: AppException) -> JSONResponse:
+    """返回 200 业务错误，避免工具层只看到 HTTP 异常。"""
+    logger.warning(
+        "Images API business error: "
+        f"type={exc.error_type}, code={exc.code}, param={exc.param}, message={exc.message}"
+    )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "created": int(time.time()),
+            "data": [],
+            "error": {
+                "message": exc.message,
+                "type": exc.error_type,
+                "param": exc.param,
+                "code": exc.code,
+            },
+        },
+    )
 
 
 class ImageGenerationRequest(BaseModel):
@@ -247,62 +269,75 @@ async def create_image(request: ImageGenerationRequest):
     非流式响应格式:
     - {"created": ..., "data": [{"b64_json": "..."}], "usage": {...}}
     """
-    # stream 默认为 false
-    if request.stream is None:
-        request.stream = False
+    try:
+        # stream 默认为 false
+        if request.stream is None:
+            request.stream = False
 
-    if request.response_format is None:
-        request.response_format = resolve_response_format(None)
+        if request.response_format is None:
+            request.response_format = resolve_response_format(None)
 
-    # 参数验证
-    validate_generation_request(request)
+        # 参数验证
+        validate_generation_request(request)
 
-    # 兼容 base64/b64_json
-    if request.response_format == "base64":
-        request.response_format = "b64_json"
+        # 兼容 base64/b64_json
+        if request.response_format == "base64":
+            request.response_format = "b64_json"
 
-    response_format = resolve_response_format(request.response_format)
-    response_field = response_field_name(response_format)
+        response_format = resolve_response_format(request.response_format)
+        response_field = response_field_name(response_format)
 
-    # 获取 token 和模型信息
-    token_mgr, token = await _get_token(request.model)
-    model_info = ModelService.get(request.model)
-    aspect_ratio = resolve_aspect_ratio(request.size)
+        # 获取 token 和模型信息
+        token_mgr, token = await _get_token(request.model)
+        model_info = ModelService.get(request.model)
+        aspect_ratio = resolve_aspect_ratio(request.size)
 
-    result = await ImageGenerationService().generate(
-        token_mgr=token_mgr,
-        token=token,
-        model_info=model_info,
-        prompt=request.prompt,
-        n=request.n,
-        response_format=response_format,
-        size=request.size,
-        aspect_ratio=aspect_ratio,
-        stream=bool(request.stream),
-    )
-
-    if result.stream:
-        return StreamingResponse(
-            result.data,
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+        result = await ImageGenerationService().generate(
+            token_mgr=token_mgr,
+            token=token,
+            model_info=model_info,
+            prompt=request.prompt,
+            n=request.n,
+            response_format=response_format,
+            size=request.size,
+            aspect_ratio=aspect_ratio,
+            stream=bool(request.stream),
         )
 
-    data = [{response_field: img} for img in result.data]
-    usage = result.usage_override or {
-        "total_tokens": 0,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "input_tokens_details": {"text_tokens": 0, "image_tokens": 0},
-    }
+        if result.stream:
+            return StreamingResponse(
+                result.data,
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+            )
 
-    return JSONResponse(
-        content={
-            "created": int(time.time()),
-            "data": data,
-            "usage": usage,
+        data = [{response_field: img} for img in result.data]
+        usage = result.usage_override or {
+            "total_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "input_tokens_details": {"text_tokens": 0, "image_tokens": 0},
         }
-    )
+
+        return JSONResponse(
+            content={
+                "created": int(time.time()),
+                "data": data,
+                "usage": usage,
+            }
+        )
+    except AppException as exc:
+        return _tool_error_response(exc)
+    except Exception as exc:
+        logger.exception(f"Images API unexpected error: {exc}")
+        return _tool_error_response(
+            AppException(
+                message="Image generation failed due to internal error",
+                error_type=ErrorType.SERVER.value,
+                code="image_internal_error",
+                status_code=500,
+            )
+        )
 
 
 @router.post("/images/edits")
@@ -323,128 +358,141 @@ async def edit_image(
 
     同官方 API 格式，仅支持 multipart/form-data 文件上传
     """
-    if response_format is None:
-        response_format = resolve_response_format(None)
-
     try:
-        edit_request = ImageEditRequest(
-            prompt=prompt,
-            model=model,
-            n=n,
-            size=size,
-            quality=quality,
-            response_format=response_format,
-            style=style,
-            stream=stream,
-        )
-    except ValidationError as exc:
-        errors = exc.errors()
-        if errors:
-            first = errors[0]
-            loc = first.get("loc", [])
-            msg = first.get("msg", "Invalid request")
-            code = first.get("type", "invalid_value")
-            param_parts = [
-                str(x) for x in loc if not (isinstance(x, int) or str(x).isdigit())
-            ]
-            param = ".".join(param_parts) if param_parts else None
-            raise ValidationException(message=msg, param=param, code=code)
-        raise ValidationException(message="Invalid request", code="invalid_value")
+        if response_format is None:
+            response_format = resolve_response_format(None)
 
-    if edit_request.stream is None:
-        edit_request.stream = False
-
-    # 兼容两种多文件字段：image / image[]
-    upload_images: List[UploadFile] = []
-    if image:
-        upload_images.extend(image)
-    if image_bracket:
-        upload_images.extend(image_bracket)
-
-    response_format = resolve_response_format(edit_request.response_format)
-    if response_format == "base64":
-        response_format = "b64_json"
-    edit_request.response_format = response_format
-    response_field = response_field_name(response_format)
-
-    # 参数验证
-    validate_edit_request(edit_request, upload_images)
-
-    max_image_bytes = 50 * 1024 * 1024
-    allowed_types = {"image/png", "image/jpeg", "image/webp", "image/jpg"}
-
-    images: List[str] = []
-    for item in upload_images:
-        content = await item.read()
-        await item.close()
-        if not content:
-            raise ValidationException(
-                message="File content is empty",
-                param="image",
-                code="empty_file",
+        try:
+            edit_request = ImageEditRequest(
+                prompt=prompt,
+                model=model,
+                n=n,
+                size=size,
+                quality=quality,
+                response_format=response_format,
+                style=style,
+                stream=stream,
             )
-        if len(content) > max_image_bytes:
-            raise ValidationException(
-                message="Image file too large. Maximum is 50MB.",
-                param="image",
-                code="file_too_large",
-            )
-        mime = (item.content_type or "").lower()
-        if mime == "image/jpg":
-            mime = "image/jpeg"
-        ext = Path(item.filename or "").suffix.lower()
-        if mime not in allowed_types:
-            if ext in (".jpg", ".jpeg"):
-                mime = "image/jpeg"
-            elif ext == ".png":
-                mime = "image/png"
-            elif ext == ".webp":
-                mime = "image/webp"
-            else:
+        except ValidationError as exc:
+            errors = exc.errors()
+            if errors:
+                first = errors[0]
+                loc = first.get("loc", [])
+                msg = first.get("msg", "Invalid request")
+                code = first.get("type", "invalid_value")
+                param_parts = [
+                    str(x) for x in loc if not (isinstance(x, int) or str(x).isdigit())
+                ]
+                param = ".".join(param_parts) if param_parts else None
+                raise ValidationException(message=msg, param=param, code=code)
+            raise ValidationException(message="Invalid request", code="invalid_value")
+
+        if edit_request.stream is None:
+            edit_request.stream = False
+
+        # 兼容两种多文件字段：image / image[]
+        upload_images: List[UploadFile] = []
+        if image:
+            upload_images.extend(image)
+        if image_bracket:
+            upload_images.extend(image_bracket)
+
+        response_format = resolve_response_format(edit_request.response_format)
+        if response_format == "base64":
+            response_format = "b64_json"
+        edit_request.response_format = response_format
+        response_field = response_field_name(response_format)
+
+        # 参数验证
+        validate_edit_request(edit_request, upload_images)
+
+        max_image_bytes = 50 * 1024 * 1024
+        allowed_types = {"image/png", "image/jpeg", "image/webp", "image/jpg"}
+
+        images: List[str] = []
+        for item in upload_images:
+            content = await item.read()
+            await item.close()
+            if not content:
                 raise ValidationException(
-                    message="Unsupported image type. Supported: png, jpg, webp.",
+                    message="File content is empty",
                     param="image",
-                    code="invalid_image_type",
+                    code="empty_file",
                 )
-        b64 = base64.b64encode(content).decode()
-        images.append(f"data:{mime};base64,{b64}")
+            if len(content) > max_image_bytes:
+                raise ValidationException(
+                    message="Image file too large. Maximum is 50MB.",
+                    param="image",
+                    code="file_too_large",
+                )
+            mime = (item.content_type or "").lower()
+            if mime == "image/jpg":
+                mime = "image/jpeg"
+            ext = Path(item.filename or "").suffix.lower()
+            if mime not in allowed_types:
+                if ext in (".jpg", ".jpeg"):
+                    mime = "image/jpeg"
+                elif ext == ".png":
+                    mime = "image/png"
+                elif ext == ".webp":
+                    mime = "image/webp"
+                else:
+                    raise ValidationException(
+                        message="Unsupported image type. Supported: png, jpg, webp.",
+                        param="image",
+                        code="invalid_image_type",
+                    )
+            b64 = base64.b64encode(content).decode()
+            images.append(f"data:{mime};base64,{b64}")
 
-    # 获取 token 和模型信息
-    token_mgr, token = await _get_token(edit_request.model)
-    model_info = ModelService.get(edit_request.model)
+        # 获取 token 和模型信息
+        token_mgr, token = await _get_token(edit_request.model)
+        model_info = ModelService.get(edit_request.model)
 
-    result = await ImageEditService().edit(
-        token_mgr=token_mgr,
-        token=token,
-        model_info=model_info,
-        prompt=edit_request.prompt,
-        images=images,
-        n=edit_request.n,
-        response_format=response_format,
-        stream=bool(edit_request.stream),
-    )
-
-    if result.stream:
-        return StreamingResponse(
-            result.data,
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+        result = await ImageEditService().edit(
+            token_mgr=token_mgr,
+            token=token,
+            model_info=model_info,
+            prompt=edit_request.prompt,
+            images=images,
+            n=edit_request.n,
+            response_format=response_format,
+            stream=bool(edit_request.stream),
         )
 
-    data = [{response_field: img} for img in result.data]
+        if result.stream:
+            return StreamingResponse(
+                result.data,
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+            )
 
-    return JSONResponse(
-        content={
-            "created": int(time.time()),
-            "data": data,
-            "usage": {
-                "total_tokens": 0,
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "input_tokens_details": {"text_tokens": 0, "image_tokens": 0},
-            },
-        }
-    )
+        data = [{response_field: img} for img in result.data]
+
+        return JSONResponse(
+            content={
+                "created": int(time.time()),
+                "data": data,
+                "usage": {
+                    "total_tokens": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "input_tokens_details": {"text_tokens": 0, "image_tokens": 0},
+                },
+            }
+        )
+    except AppException as exc:
+        return _tool_error_response(exc)
+    except Exception as exc:
+        logger.exception(f"Image edits unexpected error: {exc}")
+        return _tool_error_response(
+            AppException(
+                message="Image edit failed due to internal error",
+                error_type=ErrorType.SERVER.value,
+                code="image_edit_internal_error",
+                status_code=500,
+            )
+        )
 
 
 __all__ = ["router"]

@@ -329,6 +329,10 @@ td.table-empty {
   min-width: 0;
 }
 
+.public-nav-links .nav-link {
+  white-space: nowrap;
+}
+
 .public-desktop-actions {
   display: flex;
 }

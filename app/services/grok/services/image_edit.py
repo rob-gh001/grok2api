@@ -40,6 +40,67 @@ class ImageEditResult:
     data: Union[AsyncGenerator[str, None], List[str]]
 
 
+def _is_upload_rejected_error(exc: Exception) -> bool:
+    """判断是否为上游审核导致的上传拒绝。"""
+    msg = str(exc or "").lower()
+    if "content moderated" in msg or "content-moderated" in msg:
+        return True
+    if '"code":3' in msg or "'code': 3" in msg:
+        return True
+
+    details = getattr(exc, "details", None)
+    if isinstance(details, dict):
+        status = details.get("status")
+        body = str(details.get("body") or "").lower()
+        err = str(details.get("error") or "").lower()
+        if "content moderated" in body or "content-moderated" in body:
+            return True
+        if '"code":3' in body or "'code': 3" in body:
+            return True
+        # 某些链路只返回 400 + '"code"' 关键词，按拒绝处理。
+        if status == 400 and ('"code"' in err or "moderated" in err):
+            return True
+
+    return False
+
+
+def _is_upload_network_error(exc: Exception) -> bool:
+    """判断是否为网络连通/网关挑战类上传失败。"""
+    msg = str(exc or "").lower()
+    if (
+        "tls connect error" in msg
+        or "timed out" in msg
+        or "timeout" in msg
+        or "connection" in msg
+        or "proxy" in msg
+        or "curl: (35)" in msg
+    ):
+        return True
+
+    details = getattr(exc, "details", None)
+    if isinstance(details, dict):
+        status = details.get("status")
+        body = str(details.get("body") or "").lower()
+        if status == 403 and ("just a moment" in body or "cloudflare" in body):
+            return True
+        if "tls connect error" in body or "timed out" in body:
+            return True
+
+    return False
+
+
+def _normalize_fallback_image_url(url: str) -> str:
+    """下载失败时的兜底 URL 规范化。"""
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return raw
+    if raw.startswith("/"):
+        return f"https://assets.grok.com{raw}"
+    return f"https://assets.grok.com/{raw}"
+
+
 class ImageEditService:
     """Image edit orchestration service."""
 
@@ -74,6 +135,7 @@ class ImageEditService:
         n: int,
         response_format: str,
         stream: bool,
+        return_all_images: bool = False,
         progress_cb: Callable[[str, dict], Any] | None = None,
     ) -> ImageEditResult:
         max_token_retries = int(get_config("retry.max_retry"))
@@ -190,6 +252,7 @@ class ImageEditService:
                     response_format=response_format,
                     tool_overrides=tool_overrides,
                     model_config_override=model_config_override,
+                    return_all_images=return_all_images,
                     progress_cb=progress_cb,
                 )
                 await self._emit_progress(
@@ -249,6 +312,7 @@ class ImageEditService:
         source_image_url: str,
         response_format: str,
         stream: bool,
+        return_all_images: bool = False,
         progress_cb: Callable[[str, dict], Any] | None = None,
     ) -> ImageEditResult:
         """基于 parentPostId 进行编辑，不上传图片。"""
@@ -376,6 +440,7 @@ class ImageEditService:
                     response_format=response_format,
                     tool_overrides=tool_overrides,
                     model_config_override=model_config_override,
+                    return_all_images=return_all_images,
                     progress_cb=progress_cb,
                 )
                 await self._emit_progress(
@@ -438,6 +503,27 @@ class ImageEditService:
                         image_urls.append(
                             f"https://assets.grok.com/{file_uri.lstrip('/')}"
                         )
+        except Exception as e:
+            if _is_upload_rejected_error(e):
+                raise AppException(
+                    message="图片上传被拒绝，请更换图片后重试",
+                    error_type=ErrorType.INVALID_REQUEST.value,
+                    code="upload_rejected",
+                    status_code=400,
+                )
+            if _is_upload_network_error(e):
+                raise AppException(
+                    message="图片上传失败：网络连接异常，请稍后重试",
+                    error_type=ErrorType.SERVER.value,
+                    code="upload_network_error",
+                    status_code=502,
+                )
+            raise AppException(
+                message="图片上传失败，请稍后重试",
+                error_type=ErrorType.SERVER.value,
+                code="upload_failed",
+                status_code=502,
+            )
         finally:
             await upload_service.close()
 
@@ -485,6 +571,7 @@ class ImageEditService:
         response_format: str,
         tool_overrides: dict,
         model_config_override: dict,
+        return_all_images: bool = False,
         progress_cb: Callable[[str, dict], Any] | None = None,
     ) -> List[str]:
         async def _call_edit():
@@ -512,6 +599,8 @@ class ImageEditService:
             raise UpstreamException(
                 "Image edit returned no results", details={"error": "empty_result"}
             )
+        if return_all_images:
+            return all_images
         return [all_images[0]]
 
 
@@ -582,7 +671,14 @@ class ImageStreamProcessor(BaseProcessor):
                     if urls := _collect_images(mr):
                         for url in urls:
                             if self.response_format == "url":
-                                processed = await self.process_url(url, "image")
+                                try:
+                                    processed = await self.process_url(url, "image")
+                                except Exception as e:
+                                    logger.warning(
+                                        "Image stream URL resolve failed, fallback to raw URL: "
+                                        f"error={e}"
+                                    )
+                                    processed = _normalize_fallback_image_url(url)
                                 if processed:
                                     final_images.append(processed)
                                 continue
@@ -727,7 +823,14 @@ class ImageCollectProcessor(BaseProcessor):
                     if urls := _collect_images(mr):
                         for url in urls:
                             if self.response_format == "url":
-                                processed = await self.process_url(url, "image")
+                                try:
+                                    processed = await self.process_url(url, "image")
+                                except Exception as e:
+                                    logger.warning(
+                                        "Image collect URL resolve failed, fallback to raw URL: "
+                                        f"error={e}"
+                                    )
+                                    processed = _normalize_fallback_image_url(url)
                                 if processed:
                                     images.append(processed)
                                     progress = min(90, 64 + len(images) * 12)

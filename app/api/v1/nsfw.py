@@ -8,6 +8,7 @@ import math
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.core.config import get_config
@@ -28,6 +29,27 @@ RATIO_TO_SIZE = {
     "2:3": "1024x1792",
     "1:1": "1024x1024",
 }
+
+
+def _tool_error_response(exc: AppException) -> JSONResponse:
+    """返回 200 业务错误，避免工具层只看到 HTTP 状态码。"""
+    logger.warning(
+        "NSFW API business error: "
+        f"type={exc.error_type}, code={exc.code}, param={exc.param}, message={exc.message}"
+    )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "success": False,
+            "result": exc.message,
+            "error": {
+                "message": exc.message,
+                "type": exc.error_type,
+                "param": exc.param,
+                "code": exc.code,
+            },
+        },
+    )
 
 class NSFWRequest(BaseModel):
     """NSFW 全流程请求"""
@@ -410,16 +432,20 @@ async def _generate_nsfw_inner(data: NSFWRequest) -> Dict[str, Any]:
                             resolution=effective_resolution,
                             preset=task_preset,
                         )
-                        raw_video_response = await VideoCollectProcessor(
+                        processor = VideoCollectProcessor(
                             "grok-imagine-1.0-video",
                             task_token,
                             upscale_on_finish=data.upscale,
-                        ).process(response_stream)
+                        )
+                        raw_video_response = await processor.process(response_stream)
                         video_content = (
                             raw_video_response.get("choices", [{}])[0]
                             .get("message", {})
                             .get("content", "")
                         )
+                        # [NEW] 优先从返回结果或处理器中提取 post_id
+                        task_post_id = raw_video_response.get("post_id") or getattr(processor, "video_post_id", parent_post_id)
+                        
                         video_url, poster_url = _extract_video_urls(video_content)
                         if video_url:
                             break
@@ -442,16 +468,20 @@ async def _generate_nsfw_inner(data: NSFWRequest) -> Dict[str, Any]:
                         resolution=effective_resolution,
                         preset=task_preset,
                     )
-                    raw_video_response = await VideoCollectProcessor(
+                    processor = VideoCollectProcessor(
                         "grok-imagine-1.0-video",
                         task_token,
                         upscale_on_finish=data.upscale,
-                    ).process(response_stream)
+                    )
+                    raw_video_response = await processor.process(response_stream)
                     video_content = (
                         raw_video_response.get("choices", [{}])[0]
                         .get("message", {})
                         .get("content", "")
                     )
+                    # [NEW] 提取 post_id
+                    task_post_id = raw_video_response.get("post_id") or getattr(processor, "video_post_id", "")
+
                     video_url, poster_url = _extract_video_urls(video_content)
 
                 # parentPostId 路径无产出时，自动降级到上传图片路径重试一次
@@ -472,16 +502,20 @@ async def _generate_nsfw_inner(data: NSFWRequest) -> Dict[str, Any]:
                             resolution_name=effective_resolution,
                             preset=task_preset,
                         )
-                        raw_video_response = await VideoCollectProcessor(
+                        processor = VideoCollectProcessor(
                             "grok-imagine-1.0-video",
                             task_token,
                             upscale_on_finish=data.upscale,
-                        ).process(response_stream)
+                        )
+                        raw_video_response = await processor.process(response_stream)
                         video_content = (
                             raw_video_response.get("choices", [{}])[0]
                             .get("message", {})
                             .get("content", "")
                         )
+                        # [NEW] 提取 post_id
+                        task_post_id = raw_video_response.get("post_id") or getattr(processor, "video_post_id", task_post_id)
+
                         video_url, poster_url = _extract_video_urls(video_content)
 
                     if data.parent_post_only:
@@ -504,16 +538,20 @@ async def _generate_nsfw_inner(data: NSFWRequest) -> Dict[str, Any]:
                                 resolution=effective_resolution,
                                 preset=task_preset,
                             )
-                            raw_video_response = await VideoCollectProcessor(
+                            processor = VideoCollectProcessor(
                                 "grok-imagine-1.0-video",
                                 task_token,
                                 upscale_on_finish=data.upscale,
-                            ).process(response_stream)
+                            )
+                            raw_video_response = await processor.process(response_stream)
                             video_content = (
                                 raw_video_response.get("choices", [{}])[0]
                                 .get("message", {})
                                 .get("content", "")
                             )
+                            # [NEW] 提取 post_id
+                            task_post_id = raw_video_response.get("post_id") or getattr(processor, "video_post_id", task_post_id)
+
                             video_url, poster_url = _extract_video_urls(video_content)
                 if used_parent_post and data.parent_post_only and not video_url:
                     return {
@@ -524,7 +562,6 @@ async def _generate_nsfw_inner(data: NSFWRequest) -> Dict[str, Any]:
                         "url": "",
                         "poster_url": "",
                         "content": video_content,
-                        "raw_response": raw_video_response,
                     }
                 return {
                     "index": index,
@@ -532,11 +569,12 @@ async def _generate_nsfw_inner(data: NSFWRequest) -> Dict[str, Any]:
                     "content": video_content,
                     "url": _clean_url(video_url),
                     "poster_url": _clean_url(poster_url),
-                    "raw_response": raw_video_response,
                     "parent_post_id": parent_post_id,
                 }
             except Exception as e:
                 logger.warning(f"NSFW video failed: {task_tag}, error={e}")
+                # 从 processor 中尝试挽救 post_id (内部记录用，不再返回)
+                rescue_post_id = getattr(locals().get("processor"), "video_post_id", "") or task_post_id
                 return {
                     "index": index,
                     "image_url": image_url,
@@ -597,9 +635,25 @@ async def generate_nsfw(data: NSFWRequest, request: Request) -> Dict[str, Any]:
                 task.cancel()
                 raise HTTPException(status_code=499, detail="client_closed")
         return await task
+    except AppException as exc:
+        if not task.done():
+            task.cancel()
+        return _tool_error_response(exc)
     except asyncio.CancelledError:
         logger.info("NSFW task cancelled after disconnect")
         raise HTTPException(status_code=499, detail="client_closed")
+    except Exception as exc:
+        if not task.done():
+            task.cancel()
+        logger.exception(f"NSFW unexpected error: {exc}")
+        return _tool_error_response(
+            AppException(
+                message="NSFW processing failed due to internal error",
+                error_type=ErrorType.SERVER.value,
+                code="nsfw_internal_error",
+                status_code=500,
+            )
+        )
     finally:
         if not task.done():
             logger.info("NSFW force-cancel unfinished task")

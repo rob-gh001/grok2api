@@ -2,10 +2,11 @@
   const seedImageInput = document.getElementById('seedImageInput');
   const selectSeedBtn = document.getElementById('selectSeedBtn');
   const seedFileName = document.getElementById('seedFileName');
+  const referenceStrip = document.getElementById('referenceStrip');
   const parentPostInput = document.getElementById('parentPostInput');
   const applyParentBtn = document.getElementById('applyParentBtn');
   const previewShell = document.getElementById('previewShell');
-  const currentImage = document.getElementById('currentImage');
+  const currentGallery = document.getElementById('currentGallery');
   const previewEmpty = document.getElementById('previewEmpty');
   const currentParentId = document.getElementById('currentParentId');
   const currentMode = document.getElementById('currentMode');
@@ -20,12 +21,13 @@
   const editProgressWrap = document.getElementById('editProgressWrap');
   const editProgressBar = document.getElementById('editProgressBar');
   const editProgressText = document.getElementById('editProgressText');
+  const REFERENCE_LIMIT = 3;
 
   const state = {
     editing: false,
-    seedImageBase64: '',
-    seedFileName: '',
+    referenceImages: [],
     currentImageUrl: '',
+    currentImageUrls: [],
     currentParentPostId: '',
     currentSourceImageUrl: '',
     currentModeValue: 'upload',
@@ -198,6 +200,7 @@
 
   function applyParentPostFromText(text, options = {}) {
     const silent = Boolean(options.silent);
+    const addToReferences = Boolean(options.addToReferences);
     const hit = resolveParentMemoryByText(text);
     if (!hit || !hit.parentPostId) {
       if (!silent) {
@@ -224,8 +227,43 @@
       imageUrl: previewUrl,
       origin: 'workbench_paste_apply',
     });
+    if (addToReferences) {
+      const refUrl = String(sourceImageUrl || previewUrl || '').trim();
+      if (!refUrl) {
+        if (!silent) {
+          toast('该 parentPostId 未解析到可用参考图', 'warning');
+        }
+      } else if (state.referenceImages.length >= REFERENCE_LIMIT) {
+        if (!silent) {
+          toast(`最多支持 ${REFERENCE_LIMIT} 张参考图`, 'warning');
+        }
+      } else {
+        const exists = state.referenceImages.some((item) => (
+          (item.parentPostId && item.parentPostId === parentPostId)
+          || String(item.data || '').trim() === refUrl
+        ));
+        if (!exists) {
+          state.referenceImages.push({
+            id: buildRefId(),
+            name: `parent:${shortId(parentPostId)}`,
+            mime: '',
+            data: refUrl,
+            source: 'parent_post',
+            parentPostId,
+            sourceImageUrl: sourceImageUrl || refUrl,
+            isPrimary: false,
+            createdAt: Date.now(),
+          });
+          if (!state.referenceImages.some((item) => item.isPrimary)) {
+            state.referenceImages[0].isPrimary = true;
+          }
+          normalizeReferenceOrder();
+          renderReferenceStrip();
+        }
+      }
+    }
     if (!silent) {
-      toast('已载入 parentPostId，可直接继续编辑', 'success');
+      toast(addToReferences ? '已载入 parentPostId，并加入参考图' : '已载入 parentPostId，可直接继续编辑', 'success');
     }
     return true;
   }
@@ -317,57 +355,219 @@
     });
   }
 
-  async function applySeedImageFile(file, source) {
-    if (!file) return;
-    if (state.editing) {
-      toast('编辑进行中，暂时不能替换首图', 'warning');
+  function buildRefId() {
+    return `ref_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+  }
+
+  function getPrimaryReference() {
+    if (!state.referenceImages.length) return null;
+    return state.referenceImages[0];
+  }
+
+  function normalizeReferenceOrder() {
+    if (!state.referenceImages.length) return;
+    state.referenceImages.sort((a, b) => {
+      return a.createdAt - b.createdAt;
+    });
+  }
+
+  function updateReferenceSummary() {
+    if (!seedFileName) return;
+    seedFileName.textContent = `已添加 ${state.referenceImages.length}/${REFERENCE_LIMIT} 张`;
+  }
+
+  function renderReferenceStrip() {
+    if (!referenceStrip) return;
+    referenceStrip.innerHTML = '';
+    if (!state.referenceImages.length) {
+      const empty = document.createElement('div');
+      empty.className = 'reference-empty';
+      empty.textContent = '可上传 / 粘贴 / 拖拽参考图（最多 3 张）';
+      referenceStrip.appendChild(empty);
+      updateReferenceSummary();
       return;
-    }
-    const mimeType = String(file.type || '');
-    if (mimeType && !mimeType.startsWith('image/')) {
-      toast('仅支持图片文件', 'warning');
-      return;
-    }
-    const dataUrl = await readFileAsDataUrl(file);
-    if (!dataUrl.startsWith('data:image/')) {
-      throw new Error('图片格式不受支持');
     }
 
-    state.seedImageBase64 = dataUrl;
-    state.seedFileName = file.name || source || '未命名图片';
-    clearHistory();
-    resetCycle(true);
-    setStatus('', '已载入首图，可开始编辑');
-    updateMeta();
-    toast(`${source || '图片'}已载入，链路已重置`, 'success');
+    state.referenceImages.forEach((item) => {
+      const card = document.createElement('div');
+      card.className = 'reference-item';
+      card.title = `预览：${item.name}`;
+      card.dataset.id = item.id;
+      card.setAttribute('role', 'button');
+      card.setAttribute('tabindex', '0');
+
+      const img = document.createElement('img');
+      img.className = 'reference-thumb';
+      img.src = item.data;
+      img.alt = item.name || 'reference';
+      img.loading = 'lazy';
+      card.appendChild(img);
+
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'reference-remove-btn';
+      removeBtn.textContent = '×';
+      removeBtn.title = '删除';
+      removeBtn.dataset.id = item.id;
+      removeBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        removeReferenceImage(item.id);
+      });
+      card.appendChild(removeBtn);
+
+      card.addEventListener('click', () => {
+        previewReference(item.id);
+      });
+      card.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          previewReference(item.id);
+        }
+      });
+      referenceStrip.appendChild(card);
+    });
+
+    if (state.referenceImages.length < REFERENCE_LIMIT && seedImageInput) {
+      const addSlot = document.createElement('button');
+      addSlot.type = 'button';
+      addSlot.className = 'reference-add-slot';
+      addSlot.title = '继续添加';
+      addSlot.textContent = '+';
+      addSlot.addEventListener('click', () => seedImageInput.click());
+      referenceStrip.appendChild(addSlot);
+    }
+    updateReferenceSummary();
+  }
+
+  function previewReference(id) {
+    if (!id) return;
+    const hit = state.referenceImages.find((item) => item.id === id);
+    const previewData = String(hit && hit.data ? hit.data : '').trim();
+    if (!previewData) return;
+
+    // 仅存在这张 parentPostId 参考图时，点击即恢复到 parentPostId 编辑模式
+    if (
+      hit
+      && hit.source === 'parent_post'
+      && String(hit.parentPostId || '').trim()
+      && state.referenceImages.length === 1
+    ) {
+      state.currentParentPostId = String(hit.parentPostId || '').trim();
+      state.currentSourceImageUrl = String(hit.sourceImageUrl || previewData).trim();
+      state.currentModeValue = 'parent_post';
+      if (parentPostInput) {
+        parentPostInput.value = state.currentParentPostId;
+      }
+      updateMeta();
+      rememberParentPost({
+        parentPostId: state.currentParentPostId,
+        sourceImageUrl: state.currentSourceImageUrl,
+        imageUrl: previewData,
+        origin: 'workbench_reference_restore',
+      });
+      setPreview(previewData);
+      setStatus('done', `已恢复 parentPostId 模式：${shortId(state.currentParentPostId)}`);
+      return;
+    }
+
+    setPreview(previewData);
+    setStatus('', '已预览参考图');
+  }
+
+  function setPrimaryReference(id) {
+    // 兼容旧调用，点击行为仅预览，不再改变主图
+    previewReference(id);
+  }
+
+  function removeReferenceImage(id) {
+    const before = state.referenceImages.length;
+    state.referenceImages = state.referenceImages.filter((item) => item.id !== id);
+    if (state.referenceImages.length === before) return;
+    normalizeReferenceOrder();
+    renderReferenceStrip();
+    if (!state.referenceImages.length) {
+      setStatus('', '参考图已清空');
+    }
+  }
+
+  function clearReferenceImages() {
+    state.referenceImages = [];
+    if (seedImageInput) seedImageInput.value = '';
+    renderReferenceStrip();
+  }
+
+  function pickImageFilesFromDataTransfer(dataTransfer) {
+    if (!dataTransfer) return [];
+    const files = [];
+    const pushIfImage = (file) => {
+      if (!file) return;
+      if (!String(file.type || '').startsWith('image/')) return;
+      files.push(file);
+    };
+    if (dataTransfer.files && dataTransfer.files.length) {
+      Array.from(dataTransfer.files).forEach(pushIfImage);
+    }
+    if (!files.length && dataTransfer.items && dataTransfer.items.length) {
+      Array.from(dataTransfer.items).forEach((item) => {
+        if (!item || item.kind !== 'file') return;
+        const file = item.getAsFile ? item.getAsFile() : null;
+        pushIfImage(file);
+      });
+    }
+    return files;
+  }
+
+  async function addReferenceFiles(files, source) {
+    if (!Array.isArray(files) || !files.length) return 0;
+    if (state.editing) {
+      toast('编辑进行中，暂时不能修改参考图', 'warning');
+      return 0;
+    }
+
+    const slotsLeft = Math.max(0, REFERENCE_LIMIT - state.referenceImages.length);
+    if (slotsLeft <= 0) {
+      toast(`最多支持 ${REFERENCE_LIMIT} 张参考图`, 'warning');
+      return 0;
+    }
+    const targets = files.slice(0, slotsLeft);
+    const ignoredCount = Math.max(0, files.length - targets.length);
+
+    let added = 0;
+    for (const file of targets) {
+      const mimeType = String(file.type || '');
+      if (mimeType && !mimeType.startsWith('image/')) continue;
+      const dataUrl = await readFileAsDataUrl(file);
+      if (!dataUrl.startsWith('data:image/')) continue;
+      state.referenceImages.push({
+        id: buildRefId(),
+        name: file.name || source || '未命名图片',
+        mime: file.type || '',
+        data: dataUrl,
+        source: source || 'upload',
+        isPrimary: false,
+        createdAt: Date.now() + added,
+      });
+      added += 1;
+    }
+    normalizeReferenceOrder();
+    renderReferenceStrip();
+
+    if (added > 0) {
+      clearHistory();
+      resetCycle(false);
+      setStatus('', '已载入参考图，可开始编辑');
+    }
+
+    if (ignoredCount > 0) {
+      toast(`最多支持 ${REFERENCE_LIMIT} 张参考图，已忽略超出部分`, 'warning');
+    }
+    return added;
   }
 
   function setDragActive(active) {
     if (!previewShell) return;
     previewShell.classList.toggle('dragover', Boolean(active));
-  }
-
-  function pickImageFileFromDataTransfer(dataTransfer) {
-    if (!dataTransfer) return null;
-    if (dataTransfer.files && dataTransfer.files.length) {
-      for (const file of dataTransfer.files) {
-        if (file && String(file.type || '').startsWith('image/')) {
-          return file;
-        }
-      }
-    }
-    if (dataTransfer.items && dataTransfer.items.length) {
-      for (const item of dataTransfer.items) {
-        if (!item) continue;
-        if (item.kind === 'file') {
-          const file = item.getAsFile ? item.getAsFile() : null;
-          if (file && String(file.type || '').startsWith('image/')) {
-            return file;
-          }
-        }
-      }
-    }
-    return null;
   }
 
   function hasFiles(dataTransfer) {
@@ -385,24 +585,48 @@
     if (currentMode) {
       currentMode.textContent = state.currentModeValue || '-';
     }
-    if (seedFileName) {
-      seedFileName.textContent = state.seedFileName || '未选择文件';
+    updateReferenceSummary();
+  }
+
+  function setPreviewImages(urls) {
+    const list = (Array.isArray(urls) ? urls : [])
+      .map((item) => String(item || '').trim())
+      .filter(Boolean);
+    state.currentImageUrls = list;
+    state.currentImageUrl = list[0] || '';
+
+    if (!currentGallery || !previewEmpty) return;
+    currentGallery.innerHTML = '';
+    const primaryUrl = list[0] || '';
+    if (!primaryUrl) {
+      currentGallery.dataset.count = '0';
+      currentGallery.classList.add('hidden');
+      previewEmpty.classList.remove('hidden');
+      return;
     }
+
+    currentGallery.dataset.count = '1';
+    const item = document.createElement('div');
+    item.className = 'current-gallery-item';
+    const img = document.createElement('img');
+    img.src = primaryUrl;
+    img.alt = 'result-current';
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    item.appendChild(img);
+    currentGallery.appendChild(item);
+
+    currentGallery.classList.remove('hidden');
+    previewEmpty.classList.add('hidden');
   }
 
   function setPreview(url) {
     const displayUrl = String(url || '').trim();
-    state.currentImageUrl = displayUrl;
-    if (!currentImage || !previewEmpty) return;
     if (!displayUrl) {
-      currentImage.src = '';
-      currentImage.classList.add('hidden');
-      previewEmpty.classList.remove('hidden');
+      setPreviewImages([]);
       return;
     }
-    currentImage.src = displayUrl;
-    currentImage.classList.remove('hidden');
-    previewEmpty.classList.add('hidden');
+    setPreviewImages([displayUrl]);
   }
 
   function setEditing(loading) {
@@ -480,7 +704,10 @@
 
       const line1 = document.createElement('div');
       line1.className = 'history-line';
-      line1.innerHTML = `<strong>#${entry.round}</strong> 路 ${formatTime(entry.createdAt)} 路 ${entry.elapsedMs}ms`;
+      const roundLabel = entry.roundTotal && entry.roundTotal > 1
+        ? `#${entry.round}-${entry.roundIndex || 1}`
+        : `#${entry.round}`;
+      line1.innerHTML = `<strong>${roundLabel}</strong> 路 ${formatTime(entry.createdAt)} 路 ${entry.elapsedMs}ms`;
 
       const line2 = document.createElement('div');
       line2.className = 'history-line';
@@ -544,8 +771,9 @@
     }
     updateMeta();
 
-    if (keepSeedPreview && state.seedImageBase64) {
-      setPreview(state.seedImageBase64);
+    const primary = getPrimaryReference();
+    if (keepSeedPreview && primary && primary.data) {
+      setPreview(primary.data);
     } else {
       setPreview('');
     }
@@ -691,8 +919,8 @@
       return;
     }
 
-    if (!state.currentParentPostId && !state.seedImageBase64) {
-      toast('请先上传首图', 'warning');
+    if (!state.currentParentPostId && !state.referenceImages.length) {
+      toast('请先添加参考图', 'warning');
       return;
     }
 
@@ -711,13 +939,28 @@
       prompt,
     };
 
+    const references = state.referenceImages
+      .slice(0, REFERENCE_LIMIT)
+      .map((item) => String(item.data || '').trim())
+      .filter(Boolean);
+    if (references.length) {
+      body.image_references = references;
+      const firstRef = references[0];
+      if (firstRef.startsWith('data:image/')) {
+        body.image_base64 = firstRef;
+      } else {
+        body.image_url = firstRef;
+      }
+    }
+
     if (state.currentParentPostId) {
       body.parent_post_id = state.currentParentPostId;
       if (state.currentSourceImageUrl) {
         body.source_image_url = state.currentSourceImageUrl;
       }
-    } else {
-      body.image_base64 = state.seedImageBase64;
+    } else if (!references.length) {
+      toast('请先添加参考图', 'warning');
+      return;
     }
 
     setEditing(true);
@@ -739,7 +982,12 @@
           setStatus('running', message);
         }
       }, workbenchEditAbortController ? workbenchEditAbortController.signal : undefined);
-      const imageUrl = String(payload?.data?.[0]?.url || '').trim();
+      const imageUrls = Array.isArray(payload?.data)
+        ? payload.data
+          .map((item) => String((item && item.url) || '').trim())
+          .filter(Boolean)
+        : [];
+      const imageUrl = imageUrls[0] || '';
       if (!imageUrl) {
         throw new Error('返回结果缺少图片 URL');
       }
@@ -772,32 +1020,41 @@
       if (parentPostInput) {
         parentPostInput.value = state.currentParentPostId || '';
       }
-      setPreview(imageUrl);
+      setPreviewImages(imageUrls);
       updateMeta();
 
       state.editRound += 1;
-      const entry = {
-        id: `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
-        round: state.editRound,
-        prompt,
-        mode: state.currentModeValue,
-        imageUrl,
-        parentPostId: resolvedParentPostId,
-        sourceImageUrl,
-        elapsedMs: Number.isFinite(elapsedMs) ? Math.max(0, Math.round(elapsedMs)) : 0,
-        createdAt: Date.now(),
-      };
-      state.history.unshift(entry);
+      const createdAt = Date.now();
+      const historyEntries = imageUrls.map((url, index) => {
+        const perParentPostId = String(extractParentPostId(url) || resolvedParentPostId || '').trim();
+        return {
+          id: `${createdAt}_${index}_${Math.random().toString(16).slice(2, 8)}`,
+          round: state.editRound,
+          roundIndex: index + 1,
+          roundTotal: imageUrls.length,
+          prompt,
+          mode: state.currentModeValue,
+          imageUrl: url,
+          imageUrls,
+          parentPostId: perParentPostId,
+          sourceImageUrl: String(url || sourceImageUrl || '').trim(),
+          elapsedMs: Number.isFinite(elapsedMs) ? Math.max(0, Math.round(elapsedMs)) : 0,
+          createdAt,
+        };
+      });
+      state.history = [...historyEntries, ...state.history];
       renderHistory();
-      rememberParentPost({
-        parentPostId: resolvedParentPostId,
-        sourceImageUrl,
-        imageUrl,
-        origin: 'workbench_edit',
+      historyEntries.forEach((entry) => {
+        rememberParentPost({
+          parentPostId: entry.parentPostId || resolvedParentPostId,
+          sourceImageUrl: entry.sourceImageUrl || sourceImageUrl,
+          imageUrl: entry.imageUrl || imageUrl,
+          origin: 'workbench_edit',
+        });
       });
 
       finishEditProgress(true, '编辑完成 100%');
-      setStatus('done', `编辑完成 · round #${entry.round}`);
+      setStatus('done', `编辑完成 · round #${state.editRound}（${imageUrls.length} 张）`);
       toast('编辑成功，已更新当前画面', 'success');
     } catch (e) {
       if (e && e.name === 'AbortError') {
@@ -822,11 +1079,14 @@
       });
 
       seedImageInput.addEventListener('change', async (event) => {
-        const file = event.target && event.target.files ? event.target.files[0] : null;
-        if (!file) return;
+        const files = event.target && event.target.files ? Array.from(event.target.files) : [];
+        if (!files.length) return;
 
         try {
-          await applySeedImageFile(file, '本地图像');
+          const added = await addReferenceFiles(files, 'upload');
+          if (added > 0) {
+            toast(`已添加 ${added} 张参考图`, 'success');
+          }
         } catch (e) {
           toast(String(e.message || e), 'error');
         } finally {
@@ -841,7 +1101,7 @@
 
     if (applyParentBtn) {
       applyParentBtn.addEventListener('click', () => {
-        applyParentPostFromText(parentPostInput ? parentPostInput.value : '');
+        applyParentPostFromText(parentPostInput ? parentPostInput.value : '', { addToReferences: true });
       });
     }
 
@@ -849,7 +1109,7 @@
       parentPostInput.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') {
           event.preventDefault();
-          applyParentPostFromText(parentPostInput.value);
+          applyParentPostFromText(parentPostInput.value, { addToReferences: true });
         }
       });
       parentPostInput.addEventListener('input', () => {
@@ -891,11 +1151,14 @@
 
     document.addEventListener('paste', async (event) => {
       const dataTransfer = event.clipboardData;
-      const file = pickImageFileFromDataTransfer(dataTransfer);
-      if (file) {
+      const files = pickImageFilesFromDataTransfer(dataTransfer);
+      if (files.length) {
         event.preventDefault();
         try {
-          await applySeedImageFile(file, '粘贴图片');
+          const added = await addReferenceFiles(files, 'paste');
+          if (added > 0) {
+            toast(`已粘贴 ${added} 张参考图`, 'success');
+          }
         } catch (e) {
           toast(String(e.message || e), 'error');
         }
@@ -946,13 +1209,16 @@
         event.preventDefault();
         dragCounter = 0;
         setDragActive(false);
-        const file = pickImageFileFromDataTransfer(event.dataTransfer);
-        if (!file) {
+        const files = pickImageFilesFromDataTransfer(event.dataTransfer);
+        if (!files.length) {
           toast('未检测到可用图片文件', 'warning');
           return;
         }
         try {
-          await applySeedImageFile(file, '拖拽图片');
+          const added = await addReferenceFiles(files, 'drop');
+          if (added > 0) {
+            toast(`已拖入 ${added} 张参考图`, 'success');
+          }
         } catch (e) {
           toast(String(e.message || e), 'error');
         }
@@ -999,6 +1265,7 @@
   function init() {
     ensureInlineSubmitButton();
     bindEvents();
+    renderReferenceStrip();
     renderHistory();
     resetCycle(false);
     updateMeta();
@@ -1006,6 +1273,3 @@
 
   init();
 })();
-
-
-

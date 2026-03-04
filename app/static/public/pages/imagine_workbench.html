@@ -32,7 +32,7 @@
         <div>
           <h2 class="text-2xl font-semibold tracking-tight">图片编辑工作台</h2>
           <p class="text-[var(--accents-4)] mt-1 text-sm">
-            首次上传图片后开始编辑链路。之后每次编辑都会沿用上一次输出的 parentPostId 循环编辑。
+            支持上传/粘贴/拖拽最多 3 张参考图进行编辑；编辑后沿用上一次输出的 parentPostId 继续链路。
           </p>
         </div>
         <div id="editStatusText" class="status-chip">未开始</div>
@@ -45,9 +45,13 @@
           <div class="panel-title">当前画面</div>
 
           <div class="upload-row">
-            <input id="seedImageInput" class="hidden" type="file" accept="image/png,image/jpeg,image/webp,image/jpg">
-            <button id="selectSeedBtn" type="button" class="geist-button-outline">选择首图</button>
-            <span id="seedFileName" class="file-name">未选择文件</span>
+            <input id="seedImageInput" class="hidden" type="file" accept="image/*" multiple>
+            <button id="selectSeedBtn" type="button" class="geist-button-outline">添加参考图</button>
+            <span id="seedFileName" class="file-name">已添加 0/3 张</span>
+          </div>
+
+          <div id="referenceStrip" class="reference-strip">
+            <div class="reference-empty">可上传 / 粘贴 / 拖拽参考图（最多 3 张）</div>
           </div>
 
           <div class="parent-quick-row">
@@ -59,8 +63,8 @@
           </div>
 
           <div id="previewShell" class="preview-shell">
-            <img id="currentImage" class="current-image hidden" alt="current-image">
-            <div id="previewEmpty" class="preview-empty">请先上传首图</div>
+            <div id="currentGallery" class="current-gallery hidden"></div>
+            <div id="previewEmpty" class="preview-empty">请先添加参考图</div>
             <div id="dropHint" class="drop-hint">支持拖拽图片到此处，或按 Ctrl+V 粘贴图片</div>
           </div>
 
@@ -107,7 +111,7 @@
   <div class="mobile-fab" data-mobile-fab>
     <div class="mobile-fab-panel">
       <div class="mobile-fab-actions">
-        <button class="geist-button-outline" data-proxy-click="#selectSeedBtn" type="button">选择首图</button>
+        <button class="geist-button-outline" data-proxy-click="#selectSeedBtn" type="button">添加参考图</button>
         <button class="geist-button-outline" data-proxy-click="#applyParentBtn" type="button">使用ID</button>
         <button class="geist-button" data-proxy-click="#submitEditBtn" type="button">执行编辑</button>
         <button class="geist-button-outline" data-proxy-click="#resetCycleBtn" type="button">重置链路</button>

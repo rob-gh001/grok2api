@@ -84,8 +84,12 @@ limit_mb = 512
 [chat]
 # Reverse 接口并发上限
 concurrent = 50
+# 连接超时时间（秒），用于弱网快速失败
+connect_timeout = 12
 # Reverse 接口超时时间（秒）
 timeout = 60
+# 首包超时时间（秒），连接成功后迟迟无返回则快速超时
+first_token_timeout = 20
 # 流式空闲超时时间（秒）
 stream_timeout = 60
 

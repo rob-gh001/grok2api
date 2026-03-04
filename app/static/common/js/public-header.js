@@ -15,13 +15,23 @@ async function loadPublicHeader() {
     }
     if (desktopLogoutBtn || mobileLogoutBtn) {
       try {
-        const verify = await fetch('/v1/public/verify', { method: 'GET' });
-        if (verify.status === 401) {
-          if (desktopLogoutBtn) {
-            desktopLogoutBtn.classList.remove('hidden');
-          }
-          if (mobileLogoutBtn) {
-            mobileLogoutBtn.classList.remove('hidden');
+        const authHeader = (typeof window.ensurePublicKey === 'function')
+          ? await window.ensurePublicKey()
+          : null;
+        if (authHeader !== null) {
+          const verify = await fetch('/v1/public/verify', {
+            method: 'GET',
+            headers: (typeof window.buildAuthHeaders === 'function')
+              ? window.buildAuthHeaders(authHeader)
+              : {}
+          });
+          if (verify.ok && authHeader) {
+            if (desktopLogoutBtn) {
+              desktopLogoutBtn.classList.remove('hidden');
+            }
+            if (mobileLogoutBtn) {
+              mobileLogoutBtn.classList.remove('hidden');
+            }
           }
         }
       } catch (e) {

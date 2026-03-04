@@ -123,6 +123,7 @@ async def retry_on_status(
     *args,
     extract_status: Callable[[Exception], Optional[int]] = None,
     on_retry: Callable[[int, int, Exception, float], None] = None,
+    retry_status_codes: Optional[list[int]] = None,
     **kwargs,
 ) -> Any:
     """
@@ -142,6 +143,10 @@ async def retry_on_status(
         Last failed exception
     """
     ctx = RetryContext()
+    if retry_status_codes:
+        merged_codes = set(ctx.retry_codes or [])
+        merged_codes.update(int(code) for code in retry_status_codes)
+        ctx.retry_codes = sorted(merged_codes)
 
     # Status code extractor
     if extract_status is None:

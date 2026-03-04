@@ -1,5 +1,8 @@
 import asyncio
+import base64
+import binascii
 import contextlib
+import io
 import re
 import time
 import uuid
@@ -13,6 +16,7 @@ from pydantic import BaseModel
 
 from app.core.auth import verify_public_key, get_public_api_key, is_public_enabled
 from app.core.config import get_config
+from app.core.exceptions import AppException
 from app.core.logger import logger
 from app.api.v1.image import resolve_aspect_ratio
 from app.services.grok.services.image import ImageGenerationService
@@ -135,18 +139,91 @@ def _extract_parent_post_id_from_payload(payload: Dict[str, Any]) -> str:
     return ""
 
 
+def _decode_image_b64(compact_b64: str) -> bytes:
+    """解码 base64 图片数据。"""
+    try:
+        return base64.b64decode(compact_b64, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=400, detail="image_base64 format is invalid")
+
+
+def _detect_image_mime(raw: bytes) -> str:
+    """根据字节头判断真实图片 MIME。"""
+    if raw.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if raw.startswith(b"RIFF") and len(raw) >= 12 and raw[8:12] == b"WEBP":
+        return "image/webp"
+    if raw.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    # 无法识别时维持 png 兼容行为
+    return "image/png"
+
+
+def _encode_jpeg_base64(raw: bytes) -> str:
+    """将任意图片字节转为 JPEG base64。"""
+    try:
+        from PIL import Image, ImageOps
+        with Image.open(io.BytesIO(raw)) as img:
+            # 统一旋转方向（EXIF）并转 RGB，确保 JPEG 可保存
+            img = ImageOps.exif_transpose(img)
+            if img.mode in ("RGBA", "LA"):
+                bg = Image.new("RGB", img.size, (255, 255, 255))
+                alpha = img.split()[-1]
+                bg.paste(img.convert("RGBA"), mask=alpha)
+                out_img = bg
+            elif img.mode == "P":
+                out_img = img.convert("RGB")
+            else:
+                out_img = img.convert("RGB")
+
+            out = io.BytesIO()
+            out_img.save(out, format="JPEG", quality=92, optimize=True)
+            return base64.b64encode(out.getvalue()).decode()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"image decode failed: {e}")
+
+
 def _normalize_image_input(image_base64: str, image_url: str) -> str:
     raw_b64 = str(image_base64 or "").strip()
     raw_url = str(image_url or "").strip()
     if raw_b64:
+        declared_mime = ""
+        compact = raw_b64
         if raw_b64.startswith("data:"):
-            return raw_b64
-        compact = re.sub(r"\s+", "", raw_b64)
+            try:
+                header, payload = raw_b64.split(",", 1)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="image_base64 format is invalid")
+            compact = payload
+            mime_part = header[5:].split(";", 1)[0].strip().lower()
+            declared_mime = mime_part
+
+        compact = re.sub(r"\s+", "", compact)
         if not compact:
             raise HTTPException(status_code=400, detail="image_base64 is empty")
         if not re.fullmatch(r"[A-Za-z0-9+/=_-]+", compact):
             raise HTTPException(status_code=400, detail="image_base64 format is invalid")
-        return f"data:image/png;base64,{compact}"
+
+        raw = _decode_image_b64(compact)
+        real_mime = _detect_image_mime(raw)
+        if declared_mime and declared_mime != real_mime:
+            logger.warning(
+                "Imagine workbench image MIME mismatch corrected: "
+                f"declared={declared_mime}, detected={real_mime}"
+            )
+
+        # 按需求：非 jpeg 一律转为 jpeg 再上传，规避上游对特定格式/元数据的 400。
+        if real_mime != "image/jpeg":
+            compact = _encode_jpeg_base64(raw)
+            logger.info(
+                "Imagine workbench image normalized to JPEG before upload: "
+                f"source_mime={real_mime}, jpeg_b64_len={len(compact)}"
+            )
+            return f"data:image/jpeg;base64,{compact}"
+
+        return f"data:image/jpeg;base64,{compact}"
     if raw_url:
         if raw_url.startswith("http://") or raw_url.startswith("https://"):
             return raw_url
@@ -155,6 +232,31 @@ def _normalize_image_input(image_base64: str, image_url: str) -> str:
         status_code=400,
         detail="image_base64 or image_url is required for first edit",
     )
+
+
+def _normalize_image_references(image_references: Optional[List[str]]) -> List[str]:
+    refs = image_references or []
+    if not isinstance(refs, list):
+        raise HTTPException(status_code=400, detail="image_references must be a list")
+
+    cleaned: List[str] = []
+    for raw in refs:
+        item = str(raw or "").strip()
+        if not item:
+            continue
+        cleaned.append(item)
+
+    if len(cleaned) > 3:
+        raise HTTPException(status_code=400, detail="image_references supports at most 3 images")
+
+    normalized: List[str] = []
+    for item in cleaned:
+        if item.startswith("data:"):
+            normalized.append(_normalize_image_input(image_base64=item, image_url=""))
+        else:
+            normalized.append(_normalize_image_input(image_base64="", image_url=item))
+
+    return normalized
 
 
 async def _clean_sessions(now: float) -> None:
@@ -837,11 +939,14 @@ async def public_imagine_edit(data: ImagineEditRequest, request: Request):
                     )
                     raise
                 except Exception as e:
+                    message = str(e)
+                    if not message:
+                        message = "编辑失败，请稍后重试"
                     await queue.put(
                         {
                             "type": "error",
                             "payload": {
-                                "message": str(e),
+                                "message": message,
                             },
                         }
                     )
@@ -888,7 +993,12 @@ async def public_imagine_edit(data: ImagineEditRequest, request: Request):
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
         )
 
-    return await _run_once(progress_cb=None)
+    try:
+        return await _run_once(progress_cb=None)
+    except AppException as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception:
+        raise HTTPException(status_code=500, detail="编辑失败，请稍后重试")
 
 
 class ImagineStopRequest(BaseModel):
@@ -907,6 +1017,7 @@ class ImagineWorkbenchEditRequest(BaseModel):
     source_image_url: Optional[str] = None
     image_base64: Optional[str] = None
     image_url: Optional[str] = None
+    image_references: Optional[List[str]] = None
     stream: Optional[bool] = False
 
 
@@ -973,23 +1084,28 @@ async def public_imagine_workbench_edit(data: ImagineWorkbenchEditRequest, reque
                 source_image_url=source_image_url,
                 response_format="url",
                 stream=False,
+                return_all_images=True,
                 progress_cb=progress_cb,
             )
             mode = "parent_post"
         else:
-            image_input = _normalize_image_input(
-                image_base64=str(data.image_base64 or ""),
-                image_url=str(data.image_url or ""),
-            )
+            image_inputs = _normalize_image_references(data.image_references)
+            if not image_inputs:
+                image_input = _normalize_image_input(
+                    image_base64=str(data.image_base64 or ""),
+                    image_url=str(data.image_url or ""),
+                )
+                image_inputs = [image_input]
             result = await edit_service.edit(
                 token_mgr=token_mgr,
                 token=token,
                 model_info=model_info,
                 prompt=prompt,
-                images=[image_input],
+                images=image_inputs,
                 n=1,
                 response_format="url",
                 stream=False,
+                return_all_images=True,
                 progress_cb=progress_cb,
             )
             mode = "upload"
@@ -998,7 +1114,11 @@ async def public_imagine_workbench_edit(data: ImagineWorkbenchEditRequest, reque
         if not images:
             raise HTTPException(status_code=502, detail="Image edit returned no results")
 
-        image_url = str(images[0])
+        normalized_images = [str(item or "").strip() for item in images if str(item or "").strip()]
+        if not normalized_images:
+            raise HTTPException(status_code=502, detail="Image edit returned no results")
+
+        image_url = normalized_images[0]
         generated_parent_post_id = _extract_parent_post_id_from_url(image_url)
         current_parent_post_id = generated_parent_post_id or parent_post_id
         if current_parent_post_id:
@@ -1012,7 +1132,7 @@ async def public_imagine_workbench_edit(data: ImagineWorkbenchEditRequest, reque
 
         return {
             "created": int(time.time()),
-            "data": [{"url": image_url}],
+            "data": [{"url": url} for url in normalized_images],
             "mode": mode,
             "input_parent_post_id": parent_post_id if use_parent_mode else "",
             "generated_parent_post_id": generated_parent_post_id,
@@ -1079,11 +1199,14 @@ async def public_imagine_workbench_edit(data: ImagineWorkbenchEditRequest, reque
                     )
                     raise
                 except Exception as e:
+                    message = str(e)
+                    if not message:
+                        message = "编辑失败，请稍后重试"
                     await queue.put(
                         {
                             "type": "error",
                             "payload": {
-                                "message": str(e),
+                                "message": message,
                             },
                         }
                     )
@@ -1131,4 +1254,9 @@ async def public_imagine_workbench_edit(data: ImagineWorkbenchEditRequest, reque
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
         )
 
-    return await _run_once(progress_cb=None)
+    try:
+        return await _run_once(progress_cb=None)
+    except AppException as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception:
+        raise HTTPException(status_code=500, detail="编辑失败，请稍后重试")

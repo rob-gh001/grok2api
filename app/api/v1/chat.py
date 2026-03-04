@@ -8,7 +8,7 @@ import base64
 import binascii
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -20,6 +20,7 @@ from app.services.grok.services.video import VideoService
 from app.services.token import get_token_manager
 from app.core.config import get_config
 from app.core.exceptions import ValidationException, AppException, ErrorType
+from app.core.logger import logger
 
 
 class MessageItem(BaseModel):
@@ -61,6 +62,9 @@ class ChatCompletionRequest(BaseModel):
     video_config: Optional[VideoConfig] = Field(None, description="视频生成参数")
     # 图片生成配置
     image_config: Optional[ImageConfig] = Field(None, description="图片生成参数")
+    # 兼容 Vercel AI SDK 等 provider-specific 扩展参数
+    provider_options: Optional[Dict[str, Any]] = Field(None, description="Provider-specific options")
+    providerOptions: Optional[Dict[str, Any]] = Field(None, description="Provider-specific options (camelCase)")
 
 
 VALID_ROLES = {"developer", "system", "user", "assistant"}
@@ -72,6 +76,38 @@ ALLOWED_IMAGE_SIZES = {
     "1024x1792",
     "1024x1024",
 }
+DEFAULT_VIDEO_PROMPT = (
+    "Animate this."
+)
+
+_ALLOWED_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
+
+
+def _resolve_reasoning_effort_from_provider_options(
+    provider_options: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    if not isinstance(provider_options, dict):
+        return None
+
+    # 优先读取通用层字段
+    for key in ("reasoning_effort", "reasoningEffort"):
+        value = provider_options.get(key)
+        if isinstance(value, str):
+            effort = value.strip().lower()
+            if effort in _ALLOWED_REASONING_EFFORTS:
+                return effort
+
+    # 再读取各 provider 命名空间（如 xai/openai/anthropic）
+    for _, conf in provider_options.items():
+        if not isinstance(conf, dict):
+            continue
+        for key in ("reasoning_effort", "reasoningEffort"):
+            value = conf.get(key)
+            if isinstance(value, str):
+                effort = value.strip().lower()
+                if effort in _ALLOWED_REASONING_EFFORTS:
+                    return effort
+    return None
 
 
 def _validate_media_input(value: str, field_name: str, param: str):
@@ -137,6 +173,59 @@ def _extract_prompt_images(messages: List[MessageItem]) -> tuple[str, List[str]]
     return last_text, image_urls
 
 
+def _ensure_video_default_prompt(messages: List[MessageItem]) -> None:
+    has_image = False
+    has_text = False
+    first_empty_text_block: Optional[Dict[str, Any]] = None
+    first_empty_str_msg: Optional[MessageItem] = None
+    last_user_list_msg: Optional[MessageItem] = None
+
+    for msg in messages:
+        if (msg.role or "") != "user":
+            continue
+        content = msg.content
+        if isinstance(content, str):
+            if content.strip():
+                has_text = True
+            elif first_empty_str_msg is None:
+                first_empty_str_msg = msg
+            continue
+        if not isinstance(content, list):
+            continue
+        last_user_list_msg = msg
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("type")
+            if block_type == "image_url":
+                image = block.get("image_url") or {}
+                if isinstance(image.get("url"), str) and image.get("url", "").strip():
+                    has_image = True
+            elif block_type == "text":
+                text = block.get("text", "")
+                if isinstance(text, str) and text.strip():
+                    has_text = True
+                elif first_empty_text_block is None:
+                    first_empty_text_block = block
+
+    if (not has_image) or has_text:
+        return
+
+    if first_empty_text_block is not None:
+        first_empty_text_block["text"] = DEFAULT_VIDEO_PROMPT
+        return
+
+    if first_empty_str_msg is not None:
+        first_empty_str_msg.content = DEFAULT_VIDEO_PROMPT
+        return
+
+    if last_user_list_msg is not None and isinstance(last_user_list_msg.content, list):
+        last_user_list_msg.content.append({"type": "text", "text": DEFAULT_VIDEO_PROMPT})
+        return
+
+    messages.append(MessageItem(role="user", content=DEFAULT_VIDEO_PROMPT))
+
+
 def _resolve_image_format(value: Optional[str]) -> str:
     fmt = value or get_config("app.image_format") or "url"
     if isinstance(fmt, str):
@@ -156,6 +245,55 @@ def _image_field(response_format: str) -> str:
     if response_format == "url":
         return "url"
     return "b64_json"
+
+
+def _chat_error_as_success_response(model: str, message: str) -> JSONResponse:
+    """将业务错误包装为 200 ChatCompletion，避免工具层只看到 HTTP 异常。"""
+    return JSONResponse(
+        status_code=200,
+        content={
+            "id": f"chatcmpl-{int(time.time() * 1000)}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": message},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        },
+    )
+
+
+def _video_error_message(exc: Exception) -> str:
+    """统一视频错误文案，避免工具层只看到底层 HTTP 错误。"""
+    if isinstance(exc, AppException):
+        return exc.message
+    text = str(exc or "").lower()
+    if (
+        "blocked by moderation" in text
+        or "content moderated" in text
+        or "content-moderated" in text
+        or '"code":3' in text
+        or "'code': 3" in text
+    ):
+        return "视频生成被拒绝，请调整提示词或素材后重试"
+    if (
+        "tls connect error" in text
+        or "timed out" in text
+        or "timeout" in text
+        or "connection closed" in text
+        or "http/2" in text
+        or "curl: (35)" in text
+        or "network" in text
+        or "proxy" in text
+    ):
+        return "视频生成失败：网络连接异常，请稍后重试"
+    return "视频生成失败，请稍后重试"
+
 
 def _validate_image_config(image_conf: ImageConfig, *, stream: bool):
     n = image_conf.n or 1
@@ -547,18 +685,69 @@ def validate_request(request: ChatCompletionRequest):
 router = APIRouter(tags=["Chat"])
 
 
+async def _close_async_stream(stream_obj: Any):
+    """Try to close async stream to release upstream resources."""
+    if not stream_obj:
+        return
+    aclose = getattr(stream_obj, "aclose", None)
+    if callable(aclose):
+        try:
+            await aclose()
+        except Exception:
+            pass
+
+
+async def _stream_with_disconnect_guard(stream_obj: Any, req: Request, model: str):
+    """Stop upstream stream early when client disconnects."""
+    try:
+        async for chunk in stream_obj:
+            if req is not None and await req.is_disconnected():
+                logger.info(f"Client disconnected, stop streaming: model={model}")
+                break
+            yield chunk
+    except asyncio.CancelledError:
+        logger.info(f"Streaming cancelled by client: model={model}")
+        raise
+    finally:
+        await _close_async_stream(stream_obj)
+
+
+def _build_streaming_response(stream_obj: Any, req: Request, model: str) -> StreamingResponse:
+    guarded_stream = _stream_with_disconnect_guard(stream_obj, req, model)
+    return StreamingResponse(
+        guarded_stream,
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+
 @router.post("/chat/completions")
-async def chat_completions(request: ChatCompletionRequest):
+async def chat_completions(request: ChatCompletionRequest, raw_request: Request):
     """Chat Completions API - 兼容 OpenAI"""
-    from app.core.logger import logger
+    # OpenAI 兼容：未显式传 stream 时默认非流式（false）
+    if request.stream is None:
+        request.stream = False
+
+    # 兼容 provider-specific options 中的推理强度配置
+    if request.reasoning_effort is None:
+        provider_opts = request.provider_options or request.providerOptions
+        request.reasoning_effort = _resolve_reasoning_effort_from_provider_options(provider_opts)
+
+    model_info = ModelService.get(request.model)
+    if model_info and model_info.is_video:
+        _ensure_video_default_prompt(request.messages)
 
     # 参数验证
-    validate_request(request)
+    try:
+        validate_request(request)
+    except AppException as exc:
+        if model_info and model_info.is_video:
+            return _chat_error_as_success_response(request.model, exc.message)
+        raise
 
     logger.debug(f"Chat request: model={request.model}, stream={request.stream}")
 
     # 检测模型类型
-    model_info = ModelService.get(request.model)
     if model_info and model_info.is_image_edit:
         prompt, image_urls = _extract_prompt_images(request.messages)
         if not image_urls:
@@ -608,11 +797,7 @@ async def chat_completions(request: ChatCompletionRequest):
         )
 
         if result.stream:
-            return StreamingResponse(
-                result.data,
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
-            )
+            return _build_streaming_response(result.data, raw_request, request.model)
 
         data = [{response_field: img} for img in result.data]
         return JSONResponse(
@@ -679,11 +864,7 @@ async def chat_completions(request: ChatCompletionRequest):
         )
 
         if result.stream:
-            return StreamingResponse(
-                result.data,
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
-            )
+            return _build_streaming_response(result.data, raw_request, request.model)
 
         data = [{response_field: img} for img in result.data]
         usage = result.usage_override or {
@@ -701,78 +882,83 @@ async def chat_completions(request: ChatCompletionRequest):
         )
 
     if model_info and model_info.is_video:
-        # 提取视频配置 (默认值在 Pydantic 模型中处理)
-        v_conf = request.video_config or VideoConfig()
-        video_concurrent = int(v_conf.n or request.n or v_conf.concurrent or 1)
-        if video_concurrent <= 1:
-            result = await VideoService.completions(
-                model=request.model,
-                messages=[msg.model_dump() for msg in request.messages],
-                stream=request.stream,
-                reasoning_effort=request.reasoning_effort,
-                aspect_ratio=v_conf.aspect_ratio,
-                video_length=v_conf.video_length,
-                resolution=v_conf.resolution_name,
-                preset=v_conf.preset,
-            )
-        else:
-            messages_dump = [msg.model_dump() for msg in request.messages]
-
-            async def _run_single() -> Dict[str, Any]:
-                single = await VideoService.completions(
+        try:
+            # 提取视频配置 (默认值在 Pydantic 模型中处理)
+            v_conf = request.video_config or VideoConfig()
+            video_concurrent = int(v_conf.n or request.n or v_conf.concurrent or 1)
+            if video_concurrent <= 1:
+                result = await VideoService.completions(
                     model=request.model,
-                    messages=messages_dump,
-                    stream=False,
+                    messages=[msg.model_dump() for msg in request.messages],
+                    stream=request.stream,
                     reasoning_effort=request.reasoning_effort,
                     aspect_ratio=v_conf.aspect_ratio,
                     video_length=v_conf.video_length,
                     resolution=v_conf.resolution_name,
                     preset=v_conf.preset,
                 )
-                if not isinstance(single, dict):
-                    raise ValidationException(
-                        message="video concurrent mode only supports non-stream result",
-                        param="video_config.concurrent",
-                        code="invalid_stream_concurrent",
+            else:
+                messages_dump = [msg.model_dump() for msg in request.messages]
+
+                async def _run_single() -> Dict[str, Any]:
+                    single = await VideoService.completions(
+                        model=request.model,
+                        messages=messages_dump,
+                        stream=False,
+                        reasoning_effort=request.reasoning_effort,
+                        aspect_ratio=v_conf.aspect_ratio,
+                        video_length=v_conf.video_length,
+                        resolution=v_conf.resolution_name,
+                        preset=v_conf.preset,
                     )
-                return single
+                    if not isinstance(single, dict):
+                        raise ValidationException(
+                            message="video concurrent mode only supports non-stream result",
+                            param="video_config.concurrent",
+                            code="invalid_stream_concurrent",
+                        )
+                    return single
 
-            results = await asyncio.gather(*[_run_single() for _ in range(video_concurrent)])
-            merged = dict(results[0]) if results else {
-                "id": "",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": request.model,
-                "choices": [],
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-            }
+                results = await asyncio.gather(*[_run_single() for _ in range(video_concurrent)])
+                merged = dict(results[0]) if results else {
+                    "id": "",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "model": request.model,
+                    "choices": [],
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                }
 
-            choices: List[Dict[str, Any]] = []
-            usage_prompt = 0
-            usage_completion = 0
-            usage_total = 0
-            for idx, item in enumerate(results):
-                raw_choice = (
-                    item.get("choices", [{}])[0]
-                    if isinstance(item.get("choices"), list) and item.get("choices")
-                    else {}
-                )
-                choice = dict(raw_choice)
-                choice["index"] = idx
-                choices.append(choice)
-                usage = item.get("usage") or {}
-                usage_prompt += int(usage.get("prompt_tokens") or 0)
-                usage_completion += int(usage.get("completion_tokens") or 0)
-                usage_total += int(usage.get("total_tokens") or 0)
+                choices: List[Dict[str, Any]] = []
+                usage_prompt = 0
+                usage_completion = 0
+                usage_total = 0
+                for idx, item in enumerate(results):
+                    raw_choice = (
+                        item.get("choices", [{}])[0]
+                        if isinstance(item.get("choices"), list) and item.get("choices")
+                        else {}
+                    )
+                    choice = dict(raw_choice)
+                    choice["index"] = idx
+                    choices.append(choice)
+                    usage = item.get("usage") or {}
+                    usage_prompt += int(usage.get("prompt_tokens") or 0)
+                    usage_completion += int(usage.get("completion_tokens") or 0)
+                    usage_total += int(usage.get("total_tokens") or 0)
 
-            merged["created"] = int(time.time())
-            merged["choices"] = choices
-            merged["usage"] = {
-                "prompt_tokens": usage_prompt,
-                "completion_tokens": usage_completion,
-                "total_tokens": usage_total,
-            }
-            result = merged
+                merged["created"] = int(time.time())
+                merged["choices"] = choices
+                merged["usage"] = {
+                    "prompt_tokens": usage_prompt,
+                    "completion_tokens": usage_completion,
+                    "total_tokens": usage_total,
+                }
+                
+                result = merged
+
+        except Exception as e:
+            return _chat_error_as_success_response(request.model, _video_error_message(e))
     else:
         result = await ChatService.completions(
             model=request.model,
@@ -786,11 +972,7 @@ async def chat_completions(request: ChatCompletionRequest):
     if isinstance(result, dict):
         return JSONResponse(content=result)
     else:
-        return StreamingResponse(
-            result,
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
-        )
+        return _build_streaming_response(result, raw_request, request.model)
 
 
 __all__ = ["router"]

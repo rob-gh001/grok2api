@@ -1,4 +1,4 @@
-"""
+﻿"""
 Grok Chat 服务
 """
 
@@ -244,6 +244,9 @@ class GrokChatService:
         mode = model_info.model_mode
         # 提取消息和附件
         message, file_attachments, image_attachments = MessageExtractor.extract(messages)
+        if not (message or "").strip() and (file_attachments or image_attachments):
+            # 对齐官网行为：仅附件时仍发送非空 message，避免上游 400
+            message = "参考以下内容："
         logger.debug(
             "Extracted message length=%s, files=%s, images=%s",
             len(message),
@@ -318,7 +321,7 @@ class ChatService:
 
         # 跨 Token 重试循环
         tried_tokens = set()
-        max_token_retries = int(get_config("retry.max_retry"))
+        max_token_retries = int(get_config("retry.max_retry", 3) or 3)
         last_error = None
 
         for attempt in range(max_token_retries):
@@ -521,10 +524,11 @@ class StreamProcessor(proc_base.BaseProcessor):
             AsyncGenerator[str, None], async generator of strings
         """
         idle_timeout = get_config("chat.stream_timeout")
+        first_item_timeout = get_config("chat.first_token_timeout")
 
         try:
             async for line in proc_base._with_idle_timeout(
-                response, idle_timeout, self.model
+                response, idle_timeout, self.model, first_item_timeout
             ):
                 line = proc_base._normalize_line(line)
                 if not line:
@@ -627,35 +631,47 @@ class StreamProcessor(proc_base.BaseProcessor):
             logger.debug("Stream cancelled by client", extra={"model": self.model})
             raise
         except StreamIdleTimeoutError as e:
-            raise UpstreamException(
-                message=f"Stream idle timeout after {e.idle_seconds}s",
-                status_code=504,
-                details={
-                    "error": str(e),
-                    "type": "stream_idle_timeout",
-                    "idle_seconds": e.idle_seconds,
-                },
+            logger.error(
+                f"Stream idle timeout after {e.idle_seconds}s",
+                extra={"model": self.model, "error_type": "StreamIdleTimeoutError"},
             )
+            if not self.role_sent:
+                yield self._sse(role="assistant")
+                self.role_sent = True
+            yield self._sse(f"请求超时（空闲 {e.idle_seconds}s），请重试。")
+            yield self._sse(finish="stop")
+            yield "data: [DONE]\n\n"
+            return
         except RequestsError as e:
             if proc_base._is_http2_error(e):
                 logger.warning(f"HTTP/2 stream error: {e}", extra={"model": self.model})
-                raise UpstreamException(
-                    message="Upstream connection closed unexpectedly",
-                    status_code=502,
-                    details={"error": str(e), "type": "http2_stream_error"},
-                )
+                if not self.role_sent:
+                    yield self._sse(role="assistant")
+                    self.role_sent = True
+                yield self._sse("上游连接异常中断，请重试。")
+                yield self._sse(finish="stop")
+                yield "data: [DONE]\n\n"
+                return
             logger.error(f"Stream request error: {e}", extra={"model": self.model})
-            raise UpstreamException(
-                message=f"Upstream request failed: {e}",
-                status_code=502,
-                details={"error": str(e)},
-            )
+            if not self.role_sent:
+                yield self._sse(role="assistant")
+                self.role_sent = True
+            yield self._sse("请求上游失败，请稍后重试。")
+            yield self._sse(finish="stop")
+            yield "data: [DONE]\n\n"
+            return
         except Exception as e:
             logger.error(
                 f"Stream processing error: {e}",
                 extra={"model": self.model, "error_type": type(e).__name__},
             )
-            raise
+            if not self.role_sent:
+                yield self._sse(role="assistant")
+                self.role_sent = True
+            yield self._sse("请求失败，请重试。")
+            yield self._sse(finish="stop")
+            yield "data: [DONE]\n\n"
+            return
         finally:
             await self.close()
 
@@ -699,10 +715,11 @@ class CollectProcessor(proc_base.BaseProcessor):
         fingerprint = ""
         content = ""
         idle_timeout = get_config("chat.stream_timeout")
+        first_item_timeout = get_config("chat.first_token_timeout")
 
         try:
             async for line in proc_base._with_idle_timeout(
-                response, idle_timeout, self.model
+                response, idle_timeout, self.model, first_item_timeout
             ):
                 line = proc_base._normalize_line(line)
                 if not line:

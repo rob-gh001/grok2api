@@ -768,6 +768,10 @@ function finishBatchProcess(aborted = false, options = {}) {
   if (aborted) {
     if (action === 'delete') {
       showToast('已终止删除', 'info');
+    } else if (action === 'enable') {
+      showToast('已终止启用', 'info');
+    } else if (action === 'disable') {
+      showToast('已终止禁用', 'info');
     } else if (action === 'nsfw') {
       showToast('已终止 NSFW', 'info');
     } else {
@@ -776,6 +780,10 @@ function finishBatchProcess(aborted = false, options = {}) {
   } else {
     if (action === 'delete') {
       showToast('删除完成', 'success');
+    } else if (action === 'enable') {
+      showToast('启用完成', 'success');
+    } else if (action === 'disable') {
+      showToast('禁用完成', 'success');
     } else if (action === 'nsfw') {
       showToast('NSFW 开启完成', 'success');
     } else {
@@ -818,10 +826,14 @@ function setActionButtonsState(selectedCount = null) {
   const exportBtn = byId('btn-batch-export');
   const updateBtn = byId('btn-batch-update');
   const nsfwBtn = byId('btn-batch-nsfw');
+  const disableBtn = byId('btn-batch-disable');
+  const enableBtn = byId('btn-batch-enable');
   const deleteBtn = byId('btn-batch-delete');
   if (exportBtn) exportBtn.disabled = disabled || count === 0;
   if (updateBtn) updateBtn.disabled = disabled || count === 0;
   if (nsfwBtn) nsfwBtn.disabled = disabled || count === 0;
+  if (disableBtn) disableBtn.disabled = disabled || count === 0;
+  if (enableBtn) enableBtn.disabled = disabled || count === 0;
   if (deleteBtn) deleteBtn.disabled = disabled || count === 0;
 }
 
@@ -856,6 +868,92 @@ async function startBatchDelete() {
   } catch (e) {
     finishBatchProcess(true, { silent: true });
     showToast('删除失败', 'error');
+  }
+}
+
+async function batchDisableSelected() {
+  if (isBatchProcessing) {
+    showToast('当前有任务进行中', 'info');
+    return;
+  }
+
+  const selected = getSelectedTokens();
+  if (selected.length === 0) return showToast("未选择 Token", 'error');
+
+  const ok = await confirmAction(`确定要禁用选中的 ${selected.length} 个 Token 吗？`, { okText: '禁用' });
+  if (!ok) return;
+
+  isBatchProcessing = true;
+  isBatchPaused = false;
+  currentBatchAction = 'disable';
+  batchQueue = selected.map(t => t.token);
+  batchTotal = batchQueue.length;
+  batchProcessed = 0;
+
+  updateBatchProgress();
+  setActionButtonsState();
+
+  try {
+    const toDisable = new Set(batchQueue);
+    let changed = 0;
+    flatTokens.forEach(t => {
+      if (toDisable.has(t.token) && t.status !== 'disabled') {
+        t.status = 'disabled';
+        changed++;
+      }
+    });
+    batchProcessed = batchTotal;
+    updateBatchProgress();
+    await syncToServer();
+    finishBatchProcess(false, { silent: true });
+    loadData();
+    showToast(`禁用完成：共 ${batchTotal} 个，实际变更 ${changed} 个`, 'success');
+  } catch (e) {
+    finishBatchProcess(true, { silent: true });
+    showToast('禁用失败: ' + (e.message || '未知错误'), 'error');
+  }
+}
+
+async function batchEnableSelected() {
+  if (isBatchProcessing) {
+    showToast('当前有任务进行中', 'info');
+    return;
+  }
+
+  const selected = getSelectedTokens();
+  if (selected.length === 0) return showToast("未选择 Token", 'error');
+
+  const ok = await confirmAction(`确定要启用选中的 ${selected.length} 个 Token 吗？`, { okText: '启用' });
+  if (!ok) return;
+
+  isBatchProcessing = true;
+  isBatchPaused = false;
+  currentBatchAction = 'enable';
+  batchQueue = selected.map(t => t.token);
+  batchTotal = batchQueue.length;
+  batchProcessed = 0;
+
+  updateBatchProgress();
+  setActionButtonsState();
+
+  try {
+    const toEnable = new Set(batchQueue);
+    let changed = 0;
+    flatTokens.forEach(t => {
+      if (toEnable.has(t.token) && t.status !== 'active') {
+        t.status = 'active';
+        changed++;
+      }
+    });
+    batchProcessed = batchTotal;
+    updateBatchProgress();
+    await syncToServer();
+    finishBatchProcess(false, { silent: true });
+    loadData();
+    showToast(`启用完成：共 ${batchTotal} 个，实际变更 ${changed} 个`, 'success');
+  } catch (e) {
+    finishBatchProcess(true, { silent: true });
+    showToast('启用失败: ' + (e.message || '未知错误'), 'error');
   }
 }
 
